@@ -1,0 +1,8 @@
+._*
+*.pyc
+/build/
+*.egg-info
+/venv/
+.idea
+/.pytest_cache/
+/ndbioimage/_version.py
