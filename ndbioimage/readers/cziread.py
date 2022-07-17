@@ -8,7 +8,7 @@ from functools import cached_property
 
 class Reader(Imread):
     priority = 0
-    do_not_pickle = 'reader', 'filedict'
+    do_not_pickle = 'reader', 'filedict', 'extrametadata'
 
     @staticmethod
     def _can_open(path):

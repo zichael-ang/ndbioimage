@@ -2,7 +2,7 @@ import setuptools
 import platform
 import os
 
-version = '2022.7.0'
+version = '2022.7.1'
 
 if platform.system().lower() == 'linux':
     import pkg_resources

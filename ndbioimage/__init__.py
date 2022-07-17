@@ -96,7 +96,7 @@ class ImTransforms(ImTransformsBase):
 
     def get_bead_files(self):
         files = sorted([os.path.join(self.path, f) for f in os.listdir(self.path) if f.lower().startswith('beads')
-                        and not f.lower().endswith('.pdf')])
+                        and not f.lower().endswith('.pdf') and not f.lower().endswith('pkl')])
         if not files:
             raise Exception('No bead file found!')
         Files = []
@@ -544,6 +544,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
 
     priority = 99
     do_not_pickle = 'base', 'copies', 'cache'
+    do_not_copy = 'extrametadata'
 
     @staticmethod
     @abstractmethod
@@ -578,12 +579,19 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
                 subclass_do_not_pickle = (subclass.do_not_pickle,) if isinstance(subclass.do_not_pickle, str) \
                     else subclass.do_not_pickle if hasattr(subclass, 'do_not_pickle') else ()
                 subclass.do_not_pickle = set(do_not_pickle).union(set(subclass_do_not_pickle))
+
+                do_not_copy = (cls.do_not_copy,) if isinstance(cls.do_not_copy, str) else cls.do_not_copy
+                subclass_do_not_copy = (subclass.do_not_copy,) if isinstance(subclass.do_not_copy, str) \
+                    else subclass.do_not_copy if hasattr(subclass, 'do_not_copy') else ()
+                subclass.do_not_copy = set(do_not_copy).union(set(subclass_do_not_copy))
+
                 return super().__new__(subclass)
 
     def __init__(self, path, series=0, transform=False, drift=False, beadfile=None, sigma=None, dtype=None,
                  axes='cztxy'):
         if isinstance(path, Imread):
             return
+        self.isclosed = False
         self._shape = Shape((0, 0, 0, 0, 0))
         self.base = None
         self.copies = []
@@ -623,6 +631,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         self.metadata = {}
         self.cache = DequeDict(16)
         self._frame_decorator = None
+        self.frameoffset = 0, 0  # how far apart the centers of frame and sensor are
 
         self.open()
         self.__metadata__()
@@ -636,8 +645,6 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
             self.axes = axes
         self.slice = [np.arange(s, dtype=int) for s in self.shape.xyczt]
 
-        # how far apart the centers of frame and sensor are
-        self.frameoffset = self.shape['x'] / 2, self.shape['y'] / 2
         if not hasattr(self, 'cnamelist'):
             self.cnamelist = 'abcdefghijklmnopqrstuvwxyz'[:self.shape['c']]
 
@@ -857,11 +864,9 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
     def __contains__(self, item):
         def unique_yield(l, i):
             for k in l:
-                print(f'{k} from cache')
                 yield k
             for k in i:
                 if k not in l:
-                    print(k)
                     yield k
         for idx in unique_yield(list(self.cache.keys()),
                                 product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t']))):
@@ -904,8 +909,9 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
             except Exception as e:
                 exception = e
         self.copies = []
-        if hasattr(self, 'close'):
+        if hasattr(self, 'close') and not self.isclosed:
             self.close()
+        self.isclosed = True
         if exception:
             raise exception
 
@@ -919,13 +925,13 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         self.copies = []
         self.cache = DequeDict(16)
 
-    def __del__(self):
-        print('delete')
-        if not self.copies:
-            if self.base is None:
-                self.close()
-            else:
-                self.base.copies.remove(self)
+    # TODO: this is causing problems when multiprocessing
+    # def __del__(self):
+    #     if not self.copies:
+    #         if self.base is None:
+    #             self.__exit__()
+    #         else:
+    #             self.base.copies.remove(self)
 
     def __copy__(self):
         return self.copy()
@@ -935,7 +941,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         new.copies = []
         new.base = self
         for key, value in self.__dict__.items():
-            if not hasattr(new, key):
+            if not key in self.do_not_copy and not hasattr(new, key):
                 new.__dict__[key] = value
         self.copies.append(new)
         return new
