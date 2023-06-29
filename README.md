@@ -1,55 +1,58 @@
 # ndbioimage - Work in progress
 
 Exposes (bio) images as a numpy ndarray-like-object, but without loading the whole
-image into memory, reading from the file only when needed. Some metadata is read and
+image into memory, reading from the file only when needed. Some metadata is read
 and stored in an ome structure. Additionally, it can automatically calculate an affine
 transform that corrects for chromatic abberrations etc. and apply it on the fly to the image.
 
-Currently supports imagej tif files, czi files, micromanager tif sequences and anything
+Currently, supports imagej tif files, czi files, micromanager tif sequences and anything
 bioformats can handle. 
 
 ## Installation
 
-    pip install ndbioimage@git+https://github.com/wimpomp/ndbioimage.git
-
-Optionally:
-https://downloads.openmicroscopy.org/bio-formats/latest/artifacts/bioformats_package.jar
+```
+pip install ndbioimage@git+https://github.com/wimpomp/ndbioimage.git
+```
 
 ## Usage
 
 - Reading an image file and plotting the frame at channel=2, time=1
 
-
-    import matplotlib.pyplot as plt
-    from ndbioimage import Imread
-    with Imread('image_file.tif', axes='ctxy', dtype=int) as im:
-        plt.imshow(im[2, 1])
-
+```
+import matplotlib.pyplot as plt
+from ndbioimage import Imread
+with Imread('image_file.tif', axes='ctxy', dtype=int) as im:
+    plt.imshow(im[2, 1])
+```        
+        
 - Showing some image metadata
 
-
-    from ndbioimage import Imread
-    from pprint import pprint
-    with Imread('image_file.tif') as im:
-        pprint(im)
+```
+from ndbioimage import Imread
+from pprint import pprint
+with Imread('image_file.tif') as im:
+    pprint(im)
+```
 
 - Slicing the image without loading the image into memory
 
-
-    from ndbioimage import Imread
-    with Imread('image_file.tif', axes='cztxy') as im:
-        sliced_im = im[1, :, :, 100:200, 100:200]
+```
+from ndbioimage import Imread
+with Imread('image_file.tif', axes='cztxy') as im:
+    sliced_im = im[1, :, :, 100:200, 100:200]
+```
 
 sliced_im is an instance of Imread which will load any image data from file only when needed
 
 
 - Converting (part) of the image to a numpy ndarray
 
-
-    from ndbioimage import Imread
-    import numpy as np
-    with Imread('image_file.tif', axes='cztxy') as im:
-        array = np.asarray(im[0, 0])
+```
+from ndbioimage import Imread
+import numpy as np
+with Imread('image_file.tif', axes='cztxy') as im:
+    array = np.asarray(im[0, 0])
+```
 
 ## Adding more formats
 Readers for image formats subclass Imread. When an image reader is imported, Imread will
