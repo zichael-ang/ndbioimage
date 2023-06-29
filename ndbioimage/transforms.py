@@ -1,21 +1,19 @@
 import yaml
-import os
+import re
 import numpy as np
 from copy import deepcopy
-from collections import OrderedDict
+from pathlib import Path
 
 try:
     # best if SimpleElastix is installed: https://simpleelastix.readthedocs.io/GettingStarted.html
     import SimpleITK as sitk
-    installed = True
 except ImportError:
-    installed = False
+    sitk = None
 
 try:
-    pp = True
     from pandas import DataFrame, Series
 except ImportError:
-    pp = False
+    DataFrame, Series = None, None
 
 
 if hasattr(yaml, 'full_load'):
@@ -24,42 +22,52 @@ else:
     yamlload = yaml.load
 
 
-class Transforms(OrderedDict):
+class Transforms(dict):
     def __init__(self, *args, **kwargs):
         super().__init__(*args[1:], **kwargs)
+        self.default = Transform()
         if len(args):
             self.load(args[0])
 
+    def __mul__(self, other):
+        new = Transforms()
+        if isinstance(other, Transforms):
+            for key0, value0 in self.items():
+                for key1, value1 in other.items():
+                    new[key0 + key1] = value0 * value1
+            return new
+        elif other is None:
+            return self
+        else:
+            for key in self.keys():
+                new[key] = self[key] * other
+            return new
+
     def asdict(self):
-        return {f'{key[0]:.0f}:{key[1]:.0f}': value.asdict() for key, value in self.items()}
+        return {':'.join(str(i).replace('\\', '\\\\').replace(':', r'\:') for i in key): value.asdict()
+                for key, value in self.items()}
 
     def load(self, file):
         if isinstance(file, dict):
             d = file
         else:
-            if not file[-3:] == 'yml':
-                file += '.yml'
-            with open(file, 'r') as f:
+            with open(file.with_suffix(".yml"), 'r') as f:
                 d = yamlload(f)
+        pattern = re.compile(r'[^\\]:')
         for key, value in d.items():
-            self[tuple([int(k) for k in key.split(':')])] = Transform(value)
+            self[tuple(i.replace(r'\:', ':').replace('\\\\', '\\') for i in pattern.split(key))] = Transform(value)
 
-    def __call__(self, channel, time, tracks, detectors):
-        track, detector = tracks[channel], detectors[channel]
-        if (track, detector) in self:
-            return self[track, detector]
-        elif (0, detector) in self:
-            return self[0, detector]
-        else:
-            return Transform()
+    def __missing__(self, key):
+        return self.default
 
-    def __reduce__(self):
-        return self.__class__, (self.asdict(),)
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
     def save(self, file):
-        if not file[-3:] == 'yml':
-            file += '.yml'
-        with open(file, 'w') as f:
+        with open(file.with_suffix(".yml"), 'w') as f:
             yaml.safe_dump(self.asdict(), f, default_flow_style=None)
 
     def copy(self):
@@ -68,6 +76,7 @@ class Transforms(OrderedDict):
     def adapt(self, origin, shape):
         for value in self.values():
             value.adapt(origin, shape)
+        self.default.adapt(origin, shape)
 
     @property
     def inverse(self):
@@ -76,15 +85,20 @@ class Transforms(OrderedDict):
             inverse[key] = value.inverse
         return inverse
 
+    @property
+    def ndim(self):
+        return len(list(self.keys())[0])
+
 
 class Transform:
     def __init__(self, *args):
-        if not installed:
-            raise ImportError('SimpleElastix is not installed: https://simpleelastix.readthedocs.io/GettingStarted.html')
-        self.transform = sitk.ReadTransform(os.path.join(os.path.dirname(__file__), 'transform.txt'))
-        self.dparameters = (0, 0, 0, 0, 0, 0)
-        self.shape = (512, 512)
-        self.origin = (255.5, 255.5)
+        if sitk is None:
+            raise ImportError('SimpleElastix is not installed: '
+                              'https://simpleelastix.readthedocs.io/GettingStarted.html')
+        self.transform = sitk.ReadTransform(str(Path(__file__).parent / 'transform.txt'))
+        self.dparameters = 0, 0, 0, 0, 0, 0
+        self.shape = 512, 512
+        self.origin = 255.5, 255.5
         if len(args) == 1:  # load from file or dict
             if isinstance(args[0], np.ndarray):
                 self.matrix = args[0]
@@ -92,7 +106,7 @@ class Transform:
                 self.load(*args)
         elif len(args) > 1:  # make new transform using fixed and moving image
             self.register(*args)
-        self._last = None
+        self._last, self._inverse = None, None
 
     def __mul__(self, other):  # TODO: take care of dmatrix
         result = self.copy()
@@ -114,13 +128,13 @@ class Transform:
         return deepcopy(self)
 
     @staticmethod
-    def castImage(im):
+    def cast_image(im):
         if not isinstance(im, sitk.Image):
             im = sitk.GetImageFromArray(im)
         return im
 
     @staticmethod
-    def castArray(im):
+    def cast_array(im):
         if isinstance(im, sitk.Image):
             im = sitk.GetArrayFromImage(im)
         return im
@@ -190,7 +204,7 @@ class Transform:
             dtype = im.dtype
             im = im.astype('float')
             intp = sitk.sitkBSpline if np.issubdtype(dtype, np.floating) else sitk.sitkNearestNeighbor
-            return self.castArray(sitk.Resample(self.castImage(im), self.transform, intp, default)).astype(dtype)
+            return self.cast_array(sitk.Resample(self.cast_image(im), self.transform, intp, default)).astype(dtype)
 
     def coords(self, array, columns=None):
         """ Transform coordinates in 2 column numpy array,
@@ -198,7 +212,7 @@ class Transform:
         """
         if self.is_unity():
             return array.copy()
-        elif pp and isinstance(array, (DataFrame, Series)):
+        elif DataFrame is not None and isinstance(array, (DataFrame, Series)):
             columns = columns or ['x', 'y']
             array = array.copy()
             if isinstance(array, DataFrame):
@@ -239,7 +253,7 @@ class Transform:
         """
         kind = kind or 'affine'
         self.shape = fix.shape
-        fix, mov = self.castImage(fix), self.castImage(mov)
+        fix, mov = self.cast_image(fix), self.cast_image(mov)
         # TODO: implement RigidTransform
         tfilter = sitk.ElastixImageFilter()
         tfilter.LogToConsoleOff()

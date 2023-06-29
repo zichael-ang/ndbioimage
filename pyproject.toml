@@ -1,0 +1,37 @@
+[tool.poetry]
+name = "ndbioimage"
+version = "2023.6.0"
+description = "Bio image reading, metadata and some affine registration."
+authors = ["W. Pomp <w.pomp@nki.nl>"]
+license = "GPLv3"
+readme = "README.md"
+keywords = ["bioformats", "imread", "numpy", "metadata"]
+include = ["transform.txt"]
+repository = "https://github.com/wimpomp/ndbioimage"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+numpy = "*"
+pandas = "*"
+tifffile = "*"
+czifile = "*"
+tiffwrite = "*"
+ome-types = "*"
+pint = "*"
+tqdm = "*"
+lxml = "*"
+pyyaml = "*"
+parfor = "*"
+JPype1 = "*"
+SimpleITK-SimpleElastix = "*"
+pytest = { version = "*", optional = true }
+
+[tool.poetry.extras]
+test = ["pytest-xdist"]
+
+[tool.poetry.scripts]
+ndbioimage = "ndbioimage:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,85 +1,110 @@
-from ndbioimage import Imread, XmlData
-import os
+from abc import ABC
+
 import tifffile
 import yaml
-import json
 import re
+from ndbioimage import Imread
+from pathlib import Path
+from functools import cached_property
+from ome_types import model
+from itertools import product
+from datetime import datetime
 
 
-class Reader(Imread):
+class Reader(Imread, ABC):
     priority = 10
 
     @staticmethod
     def _can_open(path):
-        return isinstance(path, str) and os.path.splitext(path)[1] == ''
+        return isinstance(path, Path) and path.suffix == ""
 
-    def __metadata__(self):
-        filelist = sorted([file for file in os.listdir(self.path) if re.search(r'^img_\d{3,}.*\d{3,}.*\.tif$', file)])
+    def get_metadata(self, c, z, t):
+        with tifffile.TiffFile(self.filedict[c, z, t]) as tif:
+            return {key: yaml.safe_load(value) for key, value in tif.pages[0].tags[50839].value.items()}
 
-        try:
-            with tifffile.TiffFile(os.path.join(self.path, filelist[0])) as tif:
-                self.metadata = XmlData({key: yaml.safe_load(value)
-                                         for key, value in tif.pages[0].tags[50839].value.items()})
-        except Exception:  # fallback
-            with open(os.path.join(self.path, 'metadata.txt'), 'r') as metadatafile:
-                self.metadata = XmlData(json.loads(metadatafile.read()))
+    @cached_property
+    def ome(self):
+        ome = model.OME()
+        metadata = self.get_metadata(0, 0, 0)
+        ome.experimenters.append(
+            model.Experimenter(id="Experimenter:0", user_name=metadata["Info"]["Summary"]["UserName"]))
+        objective_str = metadata["Info"]["ZeissObjectiveTurret-Label"]
+        ome.instruments.append(model.Instrument())
+        ome.instruments[0].objectives.append(
+            model.Objective(
+                id="Objective:0", manufacturer="Zeiss", model=objective_str,
+                nominal_magnification=float(re.findall(r"(\d+)x", objective_str)[0]),
+                lens_na=float(re.findall(r"/(\d\.\d+)", objective_str)[0]),
+                immersion=model.objective.Immersion.OIL if 'oil' in objective_str.lower() else None))
+        tubelens_str = metadata["Info"]["ZeissOptovar-Label"]
+        ome.instruments[0].objectives.append(
+            model.Objective(
+                id="Objective:Tubelens:0", manufacturer="Zeiss", model=tubelens_str,
+                nominal_magnification=float(re.findall(r"\d?\d*[,.]?\d+(?=x$)", tubelens_str)[0].replace(",", "."))))
+        ome.instruments[0].detectors.append(
+            model.Detector(
+                id="Detector:0", amplification_gain=100))
+        ome.instruments[0].filter_sets.append(
+            model.FilterSet(id='FilterSet:0', model=metadata["Info"]["ZeissReflectorTurret-Label"]))
+
+        pxsize = metadata["Info"]["PixelSizeUm"]
+        pxsize_cam = 6.5 if 'Hamamatsu' in metadata["Info"]["Core-Camera"] else None
+        if pxsize == 0:
+            pxsize = pxsize_cam / ome.instruments[0].objectives[0].nominal_magnification
+        pixel_type = metadata["Info"]["PixelType"].lower()
+        if pixel_type.startswith("gray"):
+            pixel_type = "uint" + pixel_type[4:]
+        else:
+            pixel_type = "uint16"  # assume
+
+        size_c, size_z, size_t = [max(i) + 1 for i in zip(*self.filedict.keys())]
+        t0 = datetime.strptime(metadata["Info"]["Time"], "%Y-%m-%d %H:%M:%S %z")
+        ome.images.append(
+            model.Image(
+                pixels=model.Pixels(
+                    size_c=size_c, size_z=size_z, size_t=size_t,
+                    size_x=metadata['Info']['Width'], size_y=metadata['Info']['Height'],
+                    dimension_order="XYCZT", type=pixel_type, physical_size_x=pxsize, physical_size_y=pxsize,
+                    physical_size_z=metadata["Info"]["Summary"]["z-step_um"]),
+                objective_settings=model.ObjectiveSettings(id="Objective:0")))
+        for c, z, t in product(range(size_c), range(size_z), range(size_t)):
+            ome.images[0].pixels.planes.append(
+                model.Plane(
+                    the_c=c, the_z=z, the_t=t, exposure_time=metadata["Info"]["Exposure-ms"] / 1000,
+                    delta_t=(datetime.strptime(self.get_metadata(c, z, t)["Info"]["Time"],
+                                               "%Y-%m-%d %H:%M:%S %z") - t0).seconds))
 
         # compare channel names from metadata with filenames
-        cnamelist = self.metadata.search('ChNames')
-        cnamelist = [c for c in cnamelist if any([c in f for f in filelist])]
+        pattern_c = re.compile(r"img_\d{3,}_(.*)_\d{3,}$")
+        for c in range(size_c):
+            ome.images[0].pixels.channels.append(
+                model.Channel(
+                    id=f"Channel:{c}", name=pattern_c.findall(self.filedict[c, 0, 0].stem)[0],
+                    detector_settings=model.DetectorSettings(
+                        id="Detector:0", binning=metadata["Info"]["Hamamatsu_sCMOS-Binning"]),
+                    filter_set_ref=model.FilterSetRef(id='FilterSet:0')))
+        return ome
 
-        self.filedict = {}
-        maxc = 0
-        maxz = 0
-        maxt = 0
-        for file in filelist:
-            T = re.search(r'(?<=img_)\d{3,}', file)
-            Z = re.search(r'\d{3,}(?=\.tif$)', file)
-            C = file[T.end() + 1:Z.start() - 1]
-            t = int(T.group(0))
-            z = int(Z.group(0))
-            if C in cnamelist:
-                c = cnamelist.index(C)
-            else:
-                c = len(cnamelist)
-                cnamelist.append(C)
-
-            self.filedict[(c, z, t)] = file
-            if c > maxc:
-                maxc = c
-            if z > maxz:
-                maxz = z
-            if t > maxt:
-                maxt = t
-        self.cnamelist = [str(cname) for cname in cnamelist]
-
-        X = self.metadata.search('Width')[0]
-        Y = self.metadata.search('Height')[0]
-        self.shape = (int(X), int(Y), maxc + 1, maxz + 1, maxt + 1)
-
-        self.pxsize = self.metadata.re_search(r'(?i)pixelsize_?um', 0)[0]
-        if self.zstack:
-            self.deltaz = self.metadata.re_search(r'(?i)z-step_?um', 0)[0]
-        if self.timeseries:
-            self.settimeinterval = self.metadata.re_search(r'(?i)interval_?ms', 0)[0] / 1000
-        if 'Hamamatsu' in self.metadata.search('Core-Camera', '')[0]:
-            self.pxsizecam = 6.5
-        self.title = self.metadata.search('Prefix')[0]
-        self.acquisitiondate = self.metadata.search('Time')[0]
-        self.exposuretime = [i / 1000 for i in self.metadata.search('Exposure-ms')]
-        self.objective = self.metadata.search('ZeissObjectiveTurret-Label')[0]
-        self.optovar = []
-        for o in self.metadata.search('ZeissOptovar-Label'):
-            a = re.search(r'\d?\d*[,.]?\d+(?=x$)', o)
-            if hasattr(a, 'group'):
-                self.optovar.append(float(a.group(0).replace(',', '.')))
-        if self.pxsize == 0:
-            self.magnification = int(re.findall(r'(\d+)x', self.objective)[0]) * self.optovar[0]
-            self.pxsize = self.pxsizecam / self.magnification
+    def open(self):
+        if not self.path.name.startswith("Pos"):
+            path = self.path / f"Pos{self.series}"
         else:
-            self.magnification = self.pxsizecam / self.pxsize
-        self.pcf = self.shape[2] * self.metadata.re_search(r'(?i)conversion\sfactor\scoeff', 1)
-        self.filter = self.metadata.search('ZeissReflectorTurret-Label', self.filter)[0]
+            path = self.path
+
+        filelist = sorted([file for file in path.iterdir() if re.search(r'^img_\d{3,}.*\d{3,}.*\.tif$', file.name)])
+        with tifffile.TiffFile(self.path / filelist[0]) as tif:
+            metadata = {key: yaml.safe_load(value) for key, value in tif.pages[0].tags[50839].value.items()}
+
+        # compare channel names from metadata with filenames
+        cnamelist = metadata["Info"]["Summary"]["ChNames"]
+        cnamelist = [c for c in cnamelist if any([c in f.name for f in filelist])]
+
+        pattern_t = re.compile(r"img_(\d{3,})")
+        pattern_c = re.compile(r"img_\d{3,}_(.*)_\d{3,}$")
+        pattern_z = re.compile(r"(\d{3,})$")
+        self.filedict = {(int(pattern_t.findall(file.stem)[0]),
+                          int(pattern_z.findall(file.stem)[0]),
+                          cnamelist.index(pattern_c.findall(file.stem)[0])): file for file in filelist}
 
     def __frame__(self, c=0, z=0, t=0):
-        return tifffile.imread(os.path.join(self.path, self.filedict[(c, z, t)]))
+        return tifffile.imread(self.path / self.filedict[(c, z, t)])

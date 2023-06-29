@@ -1,89 +1,187 @@
-from ndbioimage import Imread, XmlData, JVM
-import os
+import multiprocessing
 import numpy as np
-import untangle
+from abc import ABC
+from ndbioimage import Imread, JVM
+from multiprocessing import queues
+from traceback import print_exc
+from urllib import request
+from pathlib import Path
 
-if JVM is not None:
-    import bioformats
 
-    class Reader(Imread):
-        """ This class is used as a last resort, when we don't have another way to open the file. We don't like it
-            because it requires the java vm.
+class JVMReader:
+    def __init__(self, path, series):
+        bf_jar = Path(__file__).parent.parent / 'jars' / 'bioformats_package.jar'
+        if not bf_jar.exists():
+            print('Downloading bioformats_package.jar.')
+            url = 'https://downloads.openmicroscopy.org/bio-formats/latest/artifacts/bioformats_package.jar'
+            bf_jar.write_bytes(request.urlopen(url).read())
+
+        mp = multiprocessing.get_context('spawn')
+        self.path = path
+        self.series = series
+        self.queue_in = mp.Queue()
+        self.queue_out = mp.Queue()
+        self.queue_error = mp.Queue()
+        self.done = mp.Event()
+        self.process = mp.Process(target=self.run)
+        self.process.start()
+        self.is_alive = True
+
+    def close(self):
+        if self.is_alive:
+            self.done.set()
+            while not self.queue_in.empty():
+                self.queue_in.get()
+            self.queue_in.close()
+            self.queue_in.join_thread()
+            while not self.queue_out.empty():
+                print(self.queue_out.get())
+            self.queue_out.close()
+            self.process.join()
+            self.process.close()
+            self.is_alive = False
+
+    def frame(self, c, z, t):
+        self.queue_in.put((c, z, t))
+        return self.queue_out.get()
+
+    def run(self):
+        """ Read planes from the image reader file.
+            adapted from python-bioformats/bioformats/formatreader.py
         """
-        priority = 99  # panic and open with BioFormats
-        do_not_pickle = 'reader', 'key', 'jvm'
+        jvm = JVM()
+        reader = jvm.image_reader()
+        ome_meta = jvm.metadata_tools.createOMEXMLMetadata()
+        reader.setMetadataStore(ome_meta)
+        reader.setId(str(self.path))
+        reader.setSeries(self.series)
 
-        @staticmethod
-        def _can_open(path):
-            return True
+        open_bytes_func = reader.openBytes
+        width, height = int(reader.getSizeX()), int(reader.getSizeY())
 
-        def open(self):
-            self.jvm = JVM()
-            self.jvm.start_vm()
-            self.key = np.random.randint(1e9)
-            self.reader = bioformats.get_image_reader(self.key, self.path)
+        pixel_type = reader.getPixelType()
+        little_endian = reader.isLittleEndian()
 
-        def __metadata__(self):
-            s = self.reader.rdr.getSeriesCount()
-            if self.series >= s:
-                print('Series {} does not exist.'.format(self.series))
-            self.reader.rdr.setSeries(self.series)
+        if pixel_type == jvm.format_tools.INT8:
+            dtype = np.int8
+        elif pixel_type == jvm.format_tools.UINT8:
+            dtype = np.uint8
+        elif pixel_type == jvm.format_tools.UINT16:
+            dtype = '<u2' if little_endian else '>u2'
+        elif pixel_type == jvm.format_tools.INT16:
+            dtype = '<i2' if little_endian else '>i2'
+        elif pixel_type == jvm.format_tools.UINT32:
+            dtype = '<u4' if little_endian else '>u4'
+        elif pixel_type == jvm.format_tools.INT32:
+            dtype = '<i4' if little_endian else '>i4'
+        elif pixel_type == jvm.format_tools.FLOAT:
+            dtype = '<f4' if little_endian else '>f4'
+        elif pixel_type == jvm.format_tools.DOUBLE:
+            dtype = '<f8' if little_endian else '>f8'
+        else:
+            dtype = None
 
-            X = self.reader.rdr.getSizeX()
-            Y = self.reader.rdr.getSizeY()
-            C = self.reader.rdr.getSizeC()
-            Z = self.reader.rdr.getSizeZ()
-            T = self.reader.rdr.getSizeT()
-            self.shape = (X, Y, C, Z, T)
+        try:
+            while not self.done.is_set():
+                try:
+                    c, z, t = self.queue_in.get(True, 0.02)
+                    if reader.isRGB() and reader.isInterleaved():
+                        index = reader.getIndex(z, 0, t)
+                        image = np.frombuffer(open_bytes_func(index), dtype)
+                        image.shape = (height, width, reader.getSizeC())
+                        if image.shape[2] > 3:
+                            image = image[:, :, :3]
+                    elif c is not None and reader.getRGBChannelCount() == 1:
+                        index = reader.getIndex(z, c, t)
+                        image = np.frombuffer(open_bytes_func(index), dtype)
+                        image.shape = (height, width)
+                    elif reader.getRGBChannelCount() > 1:
+                        n_planes = reader.getRGBChannelCount()
+                        rdr = jvm.channel_separator(reader)
+                        planes = [np.frombuffer(rdr.openBytes(rdr.getIndex(z, i, t)), dtype) for i in range(n_planes)]
+                        if len(planes) > 3:
+                            planes = planes[:3]
+                        elif len(planes) < 3:
+                            # > 1 and < 3 means must be 2
+                            # see issue #775
+                            planes.append(np.zeros(planes[0].shape, planes[0].dtype))
+                        image = np.dstack(planes)
+                        image.shape = (height, width, 3)
+                        del rdr
+                    elif reader.getSizeC() > 1:
+                        images = [np.frombuffer(open_bytes_func(reader.getIndex(z, i, t)), dtype)
+                                  for i in range(reader.getSizeC())]
+                        image = np.dstack(images)
+                        image.shape = (height, width, reader.getSizeC())
+                        # if not channel_names is None:
+                        #     metadata = MetadataRetrieve(self.metadata)
+                        #     for i in range(self.reader.getSizeC()):
+                        #         index = self.reader.getIndex(z, 0, t)
+                        #         channel_name = metadata.getChannelName(index, i)
+                        #         if channel_name is None:
+                        #             channel_name = metadata.getChannelID(index, i)
+                        #         channel_names.append(channel_name)
+                    elif reader.isIndexed():
+                        #
+                        # The image data is indexes into a color lookup-table
+                        # But sometimes the table is the identity table and just generates
+                        # a monochrome RGB image
+                        #
+                        index = reader.getIndex(z, 0, t)
+                        image = np.frombuffer(open_bytes_func(index), dtype)
+                        if pixel_type in (jvm.format_tools.INT16, jvm.format_tools.UINT16):
+                            lut = reader.get16BitLookupTable()
+                            if lut is not None:
+                                lut = np.array(lut)
+                                # lut = np.array(
+                                #     [env.get_short_array_elements(d)
+                                #      for d in env.get_object_array_elements(lut)]) \
+                                #     .transpose()
+                        else:
+                            lut = reader.get8BitLookupTable()
+                            if lut is not None:
+                                lut = np.array(lut)
+                                # lut = np.array(
+                                #     [env.get_byte_array_elements(d)
+                                #      for d in env.get_object_array_elements(lut)]) \
+                                #     .transpose()
+                        image.shape = (height, width)
+                        if (lut is not None) and not np.all(lut == np.arange(lut.shape[0])[:, np.newaxis]):
+                            image = lut[image, :]
+                    else:
+                        index = reader.getIndex(z, 0, t)
+                        image = np.frombuffer(open_bytes_func(index), dtype)
+                        image.shape = (height, width)
 
-            omexml = bioformats.get_omexml_metadata(self.path)
-            self.metadata = XmlData(untangle.parse(omexml))
+                    if image.ndim == 3:
+                        self.queue_out.put(image[..., c])
+                    else:
+                        self.queue_out.put(image)
+                except queues.Empty:
+                    continue
+        except (Exception,):
+            print_exc()
+            self.queue_out.put(np.zeros((32, 32)))
+        finally:
+            jvm.kill_vm()
 
-            image = list(self.metadata.search_all('Image').values())
-            if len(image) and self.series in image[0]:
-                image = XmlData(image[0][self.series])
-            else:
-                image = self.metadata
 
-            unit = lambda u: 10 ** {'nm': 9, 'µm': 6, 'um': 6, 'mm': 3, 'm': 0}[u]
+class Reader(Imread, ABC):
+    """ This class is used as a last resort, when we don't have another way to open the file. We don't like it
+        because it requires the java vm.
+    """
+    priority = 99  # panic and open with BioFormats
+    do_not_pickle = 'reader', 'key', 'jvm'
 
-            pxsizeunit = image.search('PhysicalSizeXUnit')[0]
-            pxsize = image.search('PhysicalSizeX')[0]
-            if pxsize is not None:
-                self.pxsize = pxsize / unit(pxsizeunit) * 1e6
+    @staticmethod
+    def _can_open(path):
+        return not path.is_dir()
 
-            if self.zstack:
-                deltazunit = image.search('PhysicalSizeZUnit')[0]
-                deltaz = image.search('PhysicalSizeZ')[0]
-                if deltaz is not None:
-                    self.deltaz = deltaz / unit(deltazunit) * 1e6
+    def open(self):
+        self.reader = JVMReader(self.path, self.series)
 
-            if self.path.endswith('.lif'):
-                self.title = os.path.splitext(os.path.basename(self.path))[0]
-                self.exposuretime = self.metadata.re_search(r'WideFieldChannelInfo\|ExposureTime', self.exposuretime)
-                if self.timeseries:
-                    self.settimeinterval = \
-                        self.metadata.re_search(r'ATLCameraSettingDefinition\|CycleTime', self.settimeinterval * 1e3)[
-                            0] / 1000
-                    if not self.settimeinterval:
-                        self.settimeinterval = self.exposuretime[0]
-                self.pxsizecam = self.metadata.re_search(r'ATLCameraSettingDefinition\|TheoCamSensorPixelSizeX',
-                                                         self.pxsizecam)
-                self.objective = self.metadata.re_search(r'ATLCameraSettingDefinition\|ObjectiveName', 'none')[0]
-                self.magnification = \
-                    self.metadata.re_search(r'ATLCameraSettingDefinition\|Magnification', self.magnification)[0]
-            elif self.path.endswith('.ims'):
-                self.magnification = self.metadata.search('LensPower', 100)[0]
-                self.NA = self.metadata.search('NumericalAperture', 1.47)[0]
-                self.title = self.metadata.search('Name', self.title)
-                self.binning = self.metadata.search('BinningX', 1)[0]
+    def __frame__(self, c, z, t):
+        return self.reader.frame(c, z, t)
 
-        def __frame__(self, *args):
-            frame = self.reader.read(*args, rescale=False).astype('float')
-            if frame.ndim == 3:
-                return frame[..., args[0]]
-            else:
-                return frame
-
-        def close(self):
-            bioformats.release_image_reader(self.key)
+    def close(self):
+        self.reader.close()
