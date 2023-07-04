@@ -539,6 +539,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         self.timeinterval = np.diff(self.timeval).mean() if len(self.timeval) > 1 else 0
         try:
             self.binning = [int(i) for i in image.pixels.channels[0].detector_settings.binning.value.split('x')]
+            self.pxsize *= self.binning[0]
         except (Exception,):
             self.binning = None
         self.cnamelist = [channel.name for channel in image.pixels.channels]

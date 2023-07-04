@@ -1,5 +1,3 @@
-from abc import ABC
-
 import tifffile
 import yaml
 import re
@@ -9,6 +7,8 @@ from functools import cached_property
 from ome_types import model
 from itertools import product
 from datetime import datetime
+from abc import ABC
+from parfor import pmap
 
 
 class Reader(Imread, ABC):
@@ -18,14 +18,11 @@ class Reader(Imread, ABC):
     def _can_open(path):
         return isinstance(path, Path) and path.suffix == ""
 
-    def get_metadata(self, c, z, t):
-        with tifffile.TiffFile(self.filedict[c, z, t]) as tif:
-            return {key: yaml.safe_load(value) for key, value in tif.pages[0].tags[50839].value.items()}
-
     @cached_property
     def ome(self):
         ome = model.OME()
-        metadata = self.get_metadata(0, 0, 0)
+        with tifffile.TiffFile(self.filedict[0, 0, 0]) as tif:
+            metadata = {key: yaml.safe_load(value) for key, value in tif.pages[0].tags[50839].value.items()}
         ome.experimenters.append(
             model.Experimenter(id="Experimenter:0", user_name=metadata["Info"]["Summary"]["UserName"]))
         objective_str = metadata["Info"]["ZeissObjectiveTurret-Label"]
@@ -67,12 +64,20 @@ class Reader(Imread, ABC):
                     dimension_order="XYCZT", type=pixel_type, physical_size_x=pxsize, physical_size_y=pxsize,
                     physical_size_z=metadata["Info"]["Summary"]["z-step_um"]),
                 objective_settings=model.ObjectiveSettings(id="Objective:0")))
-        for c, z, t in product(range(size_c), range(size_z), range(size_t)):
+
+        def timeval_fun(i):
+            with tifffile.TiffFile(self.filedict[i]) as tif:
+                info = yaml.safe_load(tif.pages[0].tags[50839].value['Info'])
+            return (datetime.strptime(info["Time"], "%Y-%m-%d %H:%M:%S %z") - t0).seconds
+
+        length = size_c * size_z * size_t
+        timeval = pmap(timeval_fun, product(range(size_c), range(size_z), range(size_t)), length=length,
+                       serial=length <= 24, desc='Reading metadata')
+
+        for (c, z, t), time in zip(product(range(size_c), range(size_z), range(size_t)), timeval):
             ome.images[0].pixels.planes.append(
                 model.Plane(
-                    the_c=c, the_z=z, the_t=t, exposure_time=metadata["Info"]["Exposure-ms"] / 1000,
-                    delta_t=(datetime.strptime(self.get_metadata(c, z, t)["Info"]["Time"],
-                                               "%Y-%m-%d %H:%M:%S %z") - t0).seconds))
+                    the_c=c, the_z=z, the_t=t, exposure_time=metadata["Info"]["Exposure-ms"] / 1000, delta_t=time))
 
         # compare channel names from metadata with filenames
         pattern_c = re.compile(r"img_\d{3,}_(.*)_\d{3,}$")
@@ -99,12 +104,12 @@ class Reader(Imread, ABC):
         cnamelist = metadata["Info"]["Summary"]["ChNames"]
         cnamelist = [c for c in cnamelist if any([c in f.name for f in filelist])]
 
-        pattern_t = re.compile(r"img_(\d{3,})")
         pattern_c = re.compile(r"img_\d{3,}_(.*)_\d{3,}$")
         pattern_z = re.compile(r"(\d{3,})$")
-        self.filedict = {(int(pattern_t.findall(file.stem)[0]),
+        pattern_t = re.compile(r"img_(\d{3,})")
+        self.filedict = {(cnamelist.index(pattern_c.findall(file.stem)[0]),
                           int(pattern_z.findall(file.stem)[0]),
-                          cnamelist.index(pattern_c.findall(file.stem)[0])): file for file in filelist}
+                          int(pattern_t.findall(file.stem)[0])): file for file in filelist}
 
     def __frame__(self, c=0, z=0, t=0):
         return tifffile.imread(self.path / self.filedict[(c, z, t)])

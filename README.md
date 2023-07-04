@@ -11,7 +11,7 @@ bioformats can handle.
 ## Installation
 
 ```
-pip install ndbioimage@git+https://github.com/wimpomp/ndbioimage.git
+pip install ndbioimage
 ```
 
 ## Usage
