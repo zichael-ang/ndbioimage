@@ -5,10 +5,35 @@ from ndbioimage import Imread
 from pathlib import Path
 from functools import cached_property
 from ome_types import model
+from ome_types._base_type import quantity_property
 from itertools import product
 from datetime import datetime
 from abc import ABC
-from parfor import pmap
+
+
+def lazy_property(function, field, *arg_fields):
+    def lazy(self):
+        if self.__dict__.get(field) is None:
+            self.__dict__[field] = function(*[getattr(self, arg_field) for arg_field in arg_fields])
+            self.__fields_set__.add(field)
+        return self.__dict__[field]
+    return property(lazy)
+
+
+class Plane(model.Plane):
+    """ Lazily retrieve delta_t from metadata """
+    def __init__(self, t0, file, **kwargs):
+        super().__init__(**kwargs)
+        setattr(self.__class__, 'delta_t', lazy_property(self.get_delta_t, 'delta_t', 't0', 'file'))
+        setattr(self.__class__, 'delta_t_quantity', quantity_property('delta_t'))
+        self.__dict__['t0'] = t0
+        self.__dict__['file'] = file
+
+    @staticmethod
+    def get_delta_t(t0, file):
+        with tifffile.TiffFile(file) as tif:
+            info = yaml.safe_load(tif.pages[0].tags[50839].value['Info'])
+        return float((datetime.strptime(info["Time"], "%Y-%m-%d %H:%M:%S %z") - t0).seconds)
 
 
 class Reader(Imread, ABC):
@@ -65,19 +90,10 @@ class Reader(Imread, ABC):
                     physical_size_z=metadata["Info"]["Summary"]["z-step_um"]),
                 objective_settings=model.ObjectiveSettings(id="Objective:0")))
 
-        def timeval_fun(i):
-            with tifffile.TiffFile(self.filedict[i]) as tif:
-                info = yaml.safe_load(tif.pages[0].tags[50839].value['Info'])
-            return (datetime.strptime(info["Time"], "%Y-%m-%d %H:%M:%S %z") - t0).seconds
-
-        length = size_c * size_z * size_t
-        timeval = pmap(timeval_fun, product(range(size_c), range(size_z), range(size_t)), length=length,
-                       serial=length <= 24, desc='Reading metadata')
-
-        for (c, z, t), time in zip(product(range(size_c), range(size_z), range(size_t)), timeval):
+        for c, z, t in product(range(size_c), range(size_z), range(size_t)):
             ome.images[0].pixels.planes.append(
-                model.Plane(
-                    the_c=c, the_z=z, the_t=t, exposure_time=metadata["Info"]["Exposure-ms"] / 1000, delta_t=time))
+                Plane(t0, self.filedict[c, z, t],
+                      the_c=c, the_z=z, the_t=t, exposure_time=metadata["Info"]["Exposure-ms"] / 1000))
 
         # compare channel names from metadata with filenames
         pattern_c = re.compile(r"img_\d{3,}_(.*)_\d{3,}$")

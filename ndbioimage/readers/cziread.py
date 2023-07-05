@@ -360,10 +360,12 @@ class Reader(Imread, ABC):
 
             light_sources_settings = channel.find("LightSourcesSettings")
             # no space in ome for multiple lightsources simultaneously
-            light_source_settings = light_sources_settings[0]
+            if len(light_sources_settings) > idx:
+                light_source_settings = light_sources_settings[idx]
+            else:
+                light_source_settings = light_sources_settings[0]
             light_source_settings = model.LightSourceSettings(
-                id="_".join([light_source_settings.find("LightSource").attrib["Id"]
-                             for light_source_settings in light_sources_settings]),
+                id=light_source_settings.find("LightSource").attrib["Id"],
                 attenuation=float(text(light_source_settings.find("Attenuation"))),
                 wavelength=float(text(light_source_settings.find("Wavelength"))),
                 wavelength_unit=nm)
@@ -376,7 +378,7 @@ class Reader(Imread, ABC):
                     color=model.simple_types.Color(text(channels_ds[channel.attrib["Id"]].find("Color"))),
                     detector_settings=model.DetectorSettings(id=detector.attrib["Id"], binning=binning),
                     emission_wavelength=text(channel.find("EmissionWavelength")),
-                    excitation_wavelength=text(channel.find("ExcitationWavelength")),
+                    excitation_wavelength=light_source_settings.wavelength,
                     filter_set_ref=model.FilterSetRef(id=ome.instruments[0].filter_sets[filterset_idx].id),
                     illumination_type=text(channel.find("IlluminationType")),
                     light_source_settings=light_source_settings,

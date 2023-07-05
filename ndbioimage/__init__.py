@@ -17,12 +17,12 @@ from parfor import parfor
 from tiffwrite import IJTiffFile
 from numbers import Number
 from argparse import ArgumentParser
-from ndbioimage.transforms import Transform, Transforms
-from ndbioimage.jvm import JVM
 from typing import List
 from pathlib import Path
 from importlib.metadata import version
 from traceback import print_exc
+from ndbioimage.transforms import Transform, Transforms
+from ndbioimage.jvm import JVM
 
 
 try:
@@ -535,8 +535,9 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
             self.objective = find(instrument.objectives, id=self.ome.images[0].objective_settings.id)
         else:
             self.objective = None
-        self.timeval = [find(image.pixels.planes, the_c=0, the_t=t, the_z=0).delta_t for t in range(self.shape['t'])]
-        self.timeinterval = np.diff(self.timeval).mean() if len(self.timeval) > 1 else 0
+        t0 = find(image.pixels.planes, the_c=0, the_t=0, the_z=0).delta_t
+        t1 = find(image.pixels.planes, the_c=0, the_t=self.shape['t'] - 1, the_z=0).delta_t
+        self.timeinterval = (t1 - t0) / (self.shape['t'] - 1) if self.shape['t'] > 1 else None
         try:
             self.binning = [int(i) for i in image.pixels.channels[0].detector_settings.binning.value.split('x')]
             self.pxsize *= self.binning[0]
@@ -562,10 +563,10 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
                      for channel in image.pixels.channels
                      if channel.detector_settings
                      and find(instrument.detectors, id=channel.detector_settings.id).amplification_gain]
-        self.laserwavelengths = [(channel.emission_wavelength_quantity.to(self.ureg.nm).m,)
-                                 for channel in pixels.channels if channel.emission_wavelength_quantity]
-        self.laserpowers = try_default(lambda channel: [(1 - channel.light_source_settings.attenuation,)
-                                                        for channel in pixels.channels], [])
+        self.laserwavelengths = [(channel.excitation_wavelength_quantity.to(self.ureg.nm).m,)
+                                 for channel in pixels.channels if channel.excitation_wavelength_quantity]
+        self.laserpowers = try_default(lambda: [(1 - channel.light_source_settings.attenuation,)
+                                                for channel in pixels.channels], [])
         self.filter = try_default(lambda: [find(instrument.filter_sets, id=channel.filter_set_ref.id).model
                                            for channel in image.pixels.channels], None)
         self.pxsize_um = None if self.pxsize is None else self.pxsize.to(self.ureg.um).m
@@ -697,6 +698,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
     def summary(self):
         """ gives a helpful summary of the recorded experiment """
         s = [f"path/filename: {self.path}",
+             f"series/pos:    {self.series}",
              f"reader:        {self.__class__.__module__.split('.')[-1]}",
              f"shape ({self.axes}):".ljust(15) + f"{' x '.join(str(i) for i in self.shape)}"]
         if self.pxsize_um:
