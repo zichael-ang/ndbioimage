@@ -14,6 +14,7 @@ class JVMReader:
         if not bf_jar.exists():
             print('Downloading bioformats_package.jar.')
             url = 'https://downloads.openmicroscopy.org/bio-formats/latest/artifacts/bioformats_package.jar'
+            bf_jar.parent.mkdir(exist_ok=True)
             bf_jar.write_bytes(request.urlopen(url).read())
 
         mp = multiprocessing.get_context('spawn')

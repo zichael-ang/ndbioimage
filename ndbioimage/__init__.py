@@ -423,6 +423,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
     priority = 99
     do_not_pickle = 'base', 'copies', 'cache'
     do_not_copy = 'extrametadata'
+    do_copy = 'ome'
     ureg = ureg
 
     @staticmethod
@@ -472,6 +473,11 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
                     else subclass.do_not_copy if hasattr(subclass, 'do_not_copy') else ()
                 subclass.do_not_copy = set(do_not_copy).union(set(subclass_do_not_copy))
 
+                do_copy = (cls.do_copy,) if isinstance(cls.do_copy, str) else cls.do_copy
+                subclass_do_copy = (subclass.do_copy,) if isinstance(subclass.do_copy, str) \
+                    else subclass.do_copy if hasattr(subclass, 'do_copy') else ()
+                subclass.do_copy = set(do_copy).union(set(subclass_do_copy))
+
                 return super().__new__(subclass)
 
     @staticmethod
@@ -519,13 +525,17 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         self.open()
 
         # extract some metadata from ome
-        instrument = self.ome.instruments[0]
+        instrument = self.ome.instruments[0] if self.ome.instruments else None
         image = self.ome.images[0]
         pixels = image.pixels
         self.shape = pixels.size_x, pixels.size_y, pixels.size_c, pixels.size_z, pixels.size_t
         self.pxsize = pixels.physical_size_x_quantity
-        self.exposuretime = tuple(find(image.pixels.planes, the_c=c).exposure_time_quantity
-                                  for c in range(self.shape['c']))
+        try:
+            self.exposuretime = tuple(find(image.pixels.planes, the_c=c).exposure_time_quantity
+                                      for c in range(self.shape['c']))
+        except AttributeError:
+            self.exposuretime = ()
+
         if self.zstack:
             self.deltaz = image.pixels.physical_size_z_quantity
             self.deltaz_um = None if self.deltaz is None else self.deltaz.to(self.ureg.um).m
@@ -535,16 +545,22 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
             self.objective = find(instrument.objectives, id=self.ome.images[0].objective_settings.id)
         else:
             self.objective = None
-        t0 = find(image.pixels.planes, the_c=0, the_t=0, the_z=0).delta_t
-        t1 = find(image.pixels.planes, the_c=0, the_t=self.shape['t'] - 1, the_z=0).delta_t
-        self.timeinterval = (t1 - t0) / (self.shape['t'] - 1) if self.shape['t'] > 1 else None
+        try:
+            t0 = find(image.pixels.planes, the_c=0, the_t=0, the_z=0).delta_t
+            t1 = find(image.pixels.planes, the_c=0, the_t=self.shape['t'] - 1, the_z=0).delta_t
+            self.timeinterval = (t1 - t0) / (self.shape['t'] - 1) if self.shape['t'] > 1 else None
+        except AttributeError:
+            self.timeinterval = None
         try:
             self.binning = [int(i) for i in image.pixels.channels[0].detector_settings.binning.value.split('x')]
             self.pxsize *= self.binning[0]
-        except (Exception,):
+        except (AttributeError, IndexError):
             self.binning = None
         self.cnamelist = [channel.name for channel in image.pixels.channels]
-        optovars = [objective for objective in instrument.objectives if 'tubelens' in objective.id.lower()]
+        try:
+            optovars = [objective for objective in instrument.objectives if 'tubelens' in objective.id.lower()]
+        except AttributeError:
+            optovars = []
         if len(optovars) == 0:
             self.tubelens = None
         else:
@@ -607,7 +623,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         try:
             sigma = []
             for c, d in enumerate(self.detector):
-                emission = np.hstack(self.laserwavelengths[c]) + 22 * ureg.nm
+                emission = (np.hstack(self.laserwavelengths[c]) + 22) * ureg.nm
                 sigma.append([emission[emission > s].max(initial=0), emission[emission < s].max(initial=0)][d])
             sigma = np.hstack(sigma)
             sigma[sigma == 0] = 600 * ureg.nm
@@ -705,7 +721,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
             s.append(f'pixel size:    {1000 * self.pxsize_um:.2f} nm')
         if self.zstack and self.deltaz_um:
             s.append(f'z-interval:    {1000 * self.deltaz_um:.2f} nm')
-        if self.exposuretime_s[0]:
+        if self.exposuretime_s:
             s.append(f'exposuretime:  {self.exposuretime_s[0]:.2f} s')
         if self.timeseries and self.timeinterval:
             s.append(f'time interval: {self.timeinterval:.3f} s')
@@ -749,6 +765,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
 
     def __getitem__(self, n):
         """ slice like a numpy array but return an Imread instance """
+        if self.isclosed:
+            raise IOError("file is closed")
         if isinstance(n, (slice, Number)):  # None = :
             n = (n,)
         elif isinstance(n, type(Ellipsis)):
@@ -872,7 +890,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         new.copies = []
         new.base = self
         for key, value in self.__dict__.items():
-            if key not in self.do_not_copy and not hasattr(new, key):
+            if key in self.do_copy or (key not in self.do_not_copy and not hasattr(new, key)):
                 new.__dict__[key] = value
         self.copies.append(new)
         return new

@@ -6,3 +6,4 @@
 .idea
 /.pytest_cache/
 /ndbioimage/_version.py
+/ndbioimage/jars

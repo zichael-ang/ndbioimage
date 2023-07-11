@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ndbioimage"
-version = "2023.7.1"
+version = "2023.7.2"
 description = "Bio image reading, metadata and some affine registration."
 authors = ["W. Pomp <w.pomp@nki.nl>"]
 license = "GPLv3"
@@ -8,6 +8,7 @@ readme = "README.md"
 keywords = ["bioformats", "imread", "numpy", "metadata"]
 include = ["transform.txt"]
 repository = "https://github.com/wimpomp/ndbioimage"
+exclude = [ "ndbioimage/jars" ]
 
 [tool.poetry.dependencies]
 python = "^3.8"
