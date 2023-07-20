@@ -521,6 +521,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         self.cache = DequeDict(16)
         self._frame_decorator = None
         self.frameoffset = 0, 0  # how far apart the centers of frame and sensor are
+        self.flags = dict(C_CONTIGUOUS=False, F_CONTIGUOUS=False, OWNDATA=False, WRITEABLE=False,
+                          ALIGNED=False, WRITEBACKIFCOPY=False, UPDATEIFCOPY=False)
 
         self.open()
 
@@ -721,7 +723,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
             s.append(f'pixel size:    {1000 * self.pxsize_um:.2f} nm')
         if self.zstack and self.deltaz_um:
             s.append(f'z-interval:    {1000 * self.deltaz_um:.2f} nm')
-        if self.exposuretime_s:
+        if self.exposuretime_s and not all(e is None for e in self.exposuretime_s):
             s.append(f'exposuretime:  {self.exposuretime_s[0]:.2f} s')
         if self.timeseries and self.timeinterval:
             s.append(f'time interval: {self.timeinterval:.3f} s')

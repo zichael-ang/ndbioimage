@@ -41,7 +41,7 @@ class Reader(Imread, ABC):
 
     @staticmethod
     def _can_open(path):
-        return isinstance(path, Path) and path.suffix == ""
+        return isinstance(path, Path) and path.is_dir()
 
     @cached_property
     def ome(self):
@@ -107,7 +107,7 @@ class Reader(Imread, ABC):
         return ome
 
     def open(self):
-        if not self.path.name.startswith("Pos"):
+        if re.match(r'(?:\d+\-)?Pos.*', self.path.name) is None:
             path = self.path / f"Pos{self.series}"
         else:
             path = self.path
