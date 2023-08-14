@@ -2,14 +2,12 @@ import numpy as np
 from ome_types import model
 from functools import cached_property
 from abc import ABC
-from ndbioimage import Imread
+from .. import Imread
 from itertools import product
 
 
 class Reader(Imread, ABC):
     priority = 20
-    do_not_pickle = 'ome'
-    do_not_copy = 'ome'
 
     @staticmethod
     def _can_open(path):
@@ -41,8 +39,11 @@ class Reader(Imread, ABC):
         return ome
 
     def open(self):
-        self.array = np.array(self.path)
-        self.path = 'numpy array'
+        if isinstance(self.path, np.ndarray):
+            self.array = np.array(self.path)
+            while self.array.ndim < 5:
+                self.array = np.expand_dims(self.array, -1)
+            self.path = 'numpy array'
 
     def __frame__(self, c, z, t):
         # xyczt = (slice(None), slice(None), c, z, t)

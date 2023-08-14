@@ -1,10 +1,12 @@
 import pytest
 from pathlib import Path
-from ndbioimage import Imread
+from ndbioimage import Imread, ReaderNotFoundError
 
 
-@pytest.mark.parametrize("file",
-                         [file for file in (Path(__file__).parent / 'files').iterdir() if file.suffix != '.pzl'])
+@pytest.mark.parametrize("file", (Path(__file__).parent / 'files').iterdir())
 def test_open(file):
-    with Imread(file) as im:
-        print(im[dict(c=0, z=0, t=0)].mean())
+    try:
+        with Imread(file) as im:
+            print(im[dict(c=0, z=0, t=0)].mean())
+    except ReaderNotFoundError:
+        assert len(Imread.__subclasses__()), "No subclasses for Imread found."

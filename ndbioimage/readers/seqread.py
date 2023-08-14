@@ -1,7 +1,6 @@
 import tifffile
 import yaml
 import re
-from ndbioimage import Imread
 from pathlib import Path
 from functools import cached_property
 from ome_types import model
@@ -9,6 +8,7 @@ from ome_types._base_type import quantity_property
 from itertools import product
 from datetime import datetime
 from abc import ABC
+from .. import Imread
 
 
 def lazy_property(function, field, *arg_fields):

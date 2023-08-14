@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib import request
 
 try:
     class JVM:
@@ -15,10 +16,15 @@ try:
                 cls._instance = object.__new__(cls)
             return cls._instance
 
-        def __init__(self, classpath=None):
+        def __init__(self, jars=None):
             if not self.vm_started and not self.vm_killed:
-                if classpath is None:
-                    classpath = [str(Path(__file__).parent / 'jars' / '*')]
+                jarpath = Path(__file__).parent / 'jars'
+                if jars is None:
+                    jars = {}
+                for jar, src in jars.items():
+                    if not (jarpath / jar).exists():
+                        JVM.download(src, jarpath / jar)
+                classpath = [str(jarpath / jar) for jar in jars.keys()]
 
                 import jpype
                 jpype.startJVM(classpath=classpath)
@@ -38,6 +44,12 @@ try:
 
             if self.vm_killed:
                 raise Exception('The JVM was killed before, and cannot be restarted in this Python process.')
+
+        @staticmethod
+        def download(src, dest):
+            print(f'Downloading {dest.name} to {dest}.')
+            dest.parent.mkdir(exist_ok=True)
+            dest.write_bytes(request.urlopen(src).read())
 
         def kill_vm(self):
             if self.vm_started and not self.vm_killed:

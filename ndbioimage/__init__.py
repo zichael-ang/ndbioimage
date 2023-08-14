@@ -17,13 +17,11 @@ from parfor import parfor
 from tiffwrite import IJTiffFile
 from numbers import Number
 from argparse import ArgumentParser
-from typing import List
 from pathlib import Path
 from importlib.metadata import version
 from traceback import print_exc
-from ndbioimage.transforms import Transform, Transforms
-from ndbioimage.jvm import JVM
-
+from .transforms import Transform, Transforms
+from .jvm import JVM
 
 try:
     __version__ = version(Path(__file__).parent.name)
@@ -42,8 +40,13 @@ ureg.default_format = '~P'
 set_application_registry(ureg)
 
 
+class ReaderNotFoundError(Exception):
+    pass
+
+
 class ImTransforms(Transforms):
     """ Transforms class with methods to calculate channel transforms from bead files etc. """
+
     def __init__(self, path, cyllens, file=None, transforms=None):
         super().__init__()
         self.cyllens = cyllens
@@ -179,6 +182,7 @@ class ImTransforms(Transforms):
 class ImShiftTransforms(Transforms):
     """ Class to handle drift in xy. The image this is applied to must have a channeltransform already, which is then
         replaced by this class. """
+
     def __init__(self, im, shifts=None):
         """ im:                     Calculate shifts from channel-transformed images
             im, t x 2 array         Sets shifts from array, one row per frame
@@ -242,16 +246,19 @@ class ImShiftTransforms(Transforms):
         @parfor(range(1, im.shape['t']), (im, im0), desc='Calculating image shifts.')
         def fun(t, im, im0):
             return Transform(im0, im[:, 0, t].squeeze().transpose(2, 0, 1), 'translation')
+
         transforms = [Transform()] + fun
         self.shifts = np.array([t.parameters[4:] for t in transforms])
         self.set_transforms(transforms, im.transform)
 
     def calulate_shifts(self, im):
         """ Calculate shifts relative to the previous frame """
+
         @parfor(range(1, im.shape['t']), (im,), desc='Calculating image shifts.')
         def fun(t, im):
-            return Transform(im[:, 0, t-1].squeeze().transpose(2, 0, 1), im[:, 0, t].squeeze().transpose(2, 0, 1),
+            return Transform(im[:, 0, t - 1].squeeze().transpose(2, 0, 1), im[:, 0, t].squeeze().transpose(2, 0, 1),
                              'translation')
+
         transforms = [Transform()] + fun
         self.shifts = np.cumsum([t.parameters[4:] for t in transforms])
         self.set_transforms(transforms, im.transform)
@@ -285,38 +292,10 @@ class DequeDict(OrderedDict):
         self.__truncate__()
 
 
-def tolist(item) -> List:
-    if hasattr(item, 'items'):
-        return item
-    elif isinstance(item, str):
-        return [item]
-    try:
-        iter(item)
-        return list(item)
-    except TypeError:
-        return list((item,))
-
-
 def find(obj, **kwargs):
     for item in obj:
         if all([getattr(item, key) == value for key, value in kwargs.items()]):
             return item
-
-
-def find_rec(obj, **kwargs):
-    if isinstance(obj, list):
-        for item in obj:
-            ans = find_rec(item, **kwargs)
-            if ans:
-                return ans
-    elif isinstance(obj, ome_types._base_type.OMEType):
-        if all([hasattr(obj, key) for key in kwargs.keys()]) and all(
-                [getattr(obj, key) == value for key, value in kwargs.items()]):
-            return obj
-        for k, v in obj.__dict__.items():
-            ans = find_rec(v, **kwargs)
-            if ans:
-                return ans
 
 
 def try_default(fun, default, *args, **kwargs):
@@ -326,9 +305,10 @@ def try_default(fun, default, *args, **kwargs):
         return default
 
 
-def ome_subprocess(path):
+def get_ome(path):
+    from .readers.bfread import jars
     try:
-        jvm = JVM()
+        jvm = JVM(jars)
         ome_meta = jvm.metadata_tools.createOMEXMLMetadata()
         reader = jvm.image_reader()
         reader.setMetadataStore(ome_meta)
@@ -450,7 +430,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
     def get_ome(path):
         """ Use java BioFormats to make an ome metadata structure. """
         with multiprocessing.get_context('spawn').Pool(1) as pool:
-            ome = pool.map(ome_subprocess, (path,))[0]
+            ome = pool.map(get_ome, (path,))[0]
             return ome
 
     def __new__(cls, path=None, *args, **kwargs):
@@ -479,6 +459,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
                 subclass.do_copy = set(do_copy).union(set(subclass_do_copy))
 
                 return super().__new__(subclass)
+        raise ReaderNotFoundError(f'No reader found for {path}.')
 
     @staticmethod
     def split_path_series(path):
@@ -507,7 +488,6 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         self.transform = transform
         self.drift = drift
         self.beadfile = beadfile
-        self.dtype = dtype
         self.reader = None
 
         self.pcf = None
@@ -523,14 +503,13 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         self.frameoffset = 0, 0  # how far apart the centers of frame and sensor are
         self.flags = dict(C_CONTIGUOUS=False, F_CONTIGUOUS=False, OWNDATA=False, WRITEABLE=False,
                           ALIGNED=False, WRITEBACKIFCOPY=False, UPDATEIFCOPY=False)
-
         self.open()
-
         # extract some metadata from ome
         instrument = self.ome.instruments[0] if self.ome.instruments else None
         image = self.ome.images[0]
         pixels = image.pixels
         self.shape = pixels.size_x, pixels.size_y, pixels.size_c, pixels.size_z, pixels.size_t
+        self.dtype = pixels.type.value if dtype is None else dtype
         self.pxsize = pixels.physical_size_x_quantity
         try:
             self.exposuretime = tuple(find(image.pixels.planes, the_c=c).exposure_time_quantity
@@ -556,7 +535,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         try:
             self.binning = [int(i) for i in image.pixels.channels[0].detector_settings.binning.value.split('x')]
             self.pxsize *= self.binning[0]
-        except (AttributeError, IndexError):
+        except (AttributeError, IndexError, ValueError):
             self.binning = None
         self.cnamelist = [channel.name for channel in image.pixels.channels]
         try:
@@ -718,6 +697,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         s = [f"path/filename: {self.path}",
              f"series/pos:    {self.series}",
              f"reader:        {self.__class__.__module__.split('.')[-1]}",
+             f"dtype:         {self.dtype}",
              f"shape ({self.axes}):".ljust(15) + f"{' x '.join(str(i) for i in self.shape)}"]
         if self.pxsize_um:
             s.append(f'pixel size:    {1000 * self.pxsize_um:.2f} nm')
@@ -730,10 +710,10 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         if self.binning:
             s.append('binning:       {}x{}'.format(*self.binning))
         if self.laserwavelengths:
-            s.append('laser colors:  ' + ' | '.join([' & '.join(len(w)*('{:.0f}',)).format(*w)
+            s.append('laser colors:  ' + ' | '.join([' & '.join(len(w) * ('{:.0f}',)).format(*w)
                                                      for w in self.laserwavelengths]) + ' nm')
         if self.laserpowers:
-            s.append('laser powers:  ' + ' | '.join([' & '.join(len(p)*('{:.3g}',)).format(*[100 * i for i in p])
+            s.append('laser powers:  ' + ' | '.join([' & '.join(len(p) * ('{:.3g}',)).format(*[100 * i for i in p])
                                                      for p in self.laserpowers]) + ' %')
         if self.objective:
             s.append('objective:     {}'.format(self.objective.model))
@@ -819,6 +799,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
             for k in b:
                 if k not in a:
                     yield k
+
         for idx in unique_yield(list(self.cache.keys()),
                                 product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t']))):
             xyczt = (slice(None), slice(None)) + idx
@@ -1226,6 +1207,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
     @cached_property
     def piezoval(self):
         """ gives the height of the piezo and focus motor, only available when CylLensGUI was used """
+
         def upack(idx):
             time = list()
             val = list()
@@ -1291,7 +1273,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
                 return
         return
 
-    def save_as_tiff(self, fname=None, c=None, z=None, t=None, split=False, bar=True, pixel_type='uint16'):
+    def save_as_tiff(self, fname=None, c=None, z=None, t=None, split=False, bar=True, pixel_type='uint16', **kwargs):
         """ saves the image as a tiff-file
             split: split channels into different files """
         if fname is None:
@@ -1319,7 +1301,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
             shape = [len(i) for i in n]
             at_least_one = False
             with IJTiffFile(fname.with_suffix('.tif'), shape, pixel_type,
-                            pxsize=self.pxsize_um, deltaz=self.deltaz_um) as tif:
+                            pxsize=self.pxsize_um, deltaz=self.deltaz_um, **kwargs) as tif:
                 for i, m in tqdm(zip(product(*[range(s) for s in shape]), product(*n)),
                                  total=np.prod(shape), desc='Saving tiff', disable=not bar):
                     if np.any(self(*m)) or not at_least_one:
@@ -1353,4 +1335,4 @@ def main():
                 im.save_as_tiff(out, args.channel, args.zslice, args.time, args.split)
 
 
-from ndbioimage.readers import *
+from .readers import *

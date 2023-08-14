@@ -4,10 +4,10 @@ import re
 from lxml import etree
 from ome_types import model
 from abc import ABC
-from ndbioimage import Imread
 from functools import cached_property
 from itertools import product
 from pathlib import Path
+from .. import Imread
 
 
 class Reader(Imread, ABC):
@@ -414,7 +414,7 @@ class Reader(Imread, ABC):
         return ome
 
     def __frame__(self, c=0, z=0, t=0):
-        f = np.zeros(self.shape['xy'], self.dtype)
+        f = np.zeros(self.file_shape[:2], self.dtype)
         directory_entries = self.filedict[c, z, t]
         x_min = min([f.start[f.axes.index('X')] for f in directory_entries])
         y_min = min([f.start[f.axes.index('Y')] for f in directory_entries])

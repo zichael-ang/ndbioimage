@@ -1,22 +1,17 @@
 import multiprocessing
 import numpy as np
 from abc import ABC
-from ndbioimage import Imread, JVM
 from multiprocessing import queues
 from traceback import print_exc
-from urllib import request
-from pathlib import Path
+from .. import Imread, JVM
+
+
+jars = {'bioformats_package.jar':
+            'https://downloads.openmicroscopy.org/bio-formats/latest/artifacts/bioformats_package.jar'}
 
 
 class JVMReader:
     def __init__(self, path, series):
-        bf_jar = Path(__file__).parent.parent / 'jars' / 'bioformats_package.jar'
-        if not bf_jar.exists():
-            print('Downloading bioformats_package.jar.')
-            url = 'https://downloads.openmicroscopy.org/bio-formats/latest/artifacts/bioformats_package.jar'
-            bf_jar.parent.mkdir(exist_ok=True)
-            bf_jar.write_bytes(request.urlopen(url).read())
-
         mp = multiprocessing.get_context('spawn')
         self.path = path
         self.series = series
@@ -50,7 +45,7 @@ class JVMReader:
         """ Read planes from the image reader file.
             adapted from python-bioformats/bioformats/formatreader.py
         """
-        jvm = JVM()
+        jvm = JVM(jars)
         reader = jvm.image_reader()
         ome_meta = jvm.metadata_tools.createOMEXMLMetadata()
         reader.setMetadataStore(ome_meta)
@@ -167,6 +162,18 @@ class JVMReader:
             jvm.kill_vm()
 
 
+def can_open(path):
+    try:
+        jvm = JVM(jars)
+        reader = jvm.image_reader()
+        reader.getFormat(str(path))
+        return True
+    except (Exception,):
+        return False
+    finally:
+        jvm.kill_vm()
+
+
 class Reader(Imread, ABC):
     """ This class is used as a last resort, when we don't have another way to open the file. We don't like it
         because it requires the java vm.
@@ -176,7 +183,10 @@ class Reader(Imread, ABC):
 
     @staticmethod
     def _can_open(path):
-        return not path.is_dir()
+        """ Use java BioFormats to make an ome metadata structure. """
+        with multiprocessing.get_context('spawn').Pool(1) as pool:
+            ome = pool.map(can_open, (path,))[0]
+            return ome
 
     def open(self):
         self.reader = JVMReader(self.path, self.series)

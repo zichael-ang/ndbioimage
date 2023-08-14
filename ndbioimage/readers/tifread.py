@@ -1,13 +1,12 @@
-from abc import ABC
-
-from ndbioimage import Imread
 import numpy as np
 import tifffile
 import yaml
+from abc import ABC
 from functools import cached_property
 from ome_types import model
 from pathlib import Path
 from itertools import product
+from .. import Imread
 
 
 class Reader(Imread, ABC):
@@ -18,7 +17,7 @@ class Reader(Imread, ABC):
     def _can_open(path):
         if isinstance(path, Path) and path.suffix in ('.tif', '.tiff'):
             with tifffile.TiffFile(path) as tif:
-                return tif.is_imagej
+                return tif.is_imagej and tif.pages[-1]._nextifd() == 0
         else:
             return False
 
