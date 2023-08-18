@@ -45,7 +45,7 @@ class Reader(AbstractReader, ABC):
         size_y, size_x = self.reader.pages[0].shape
         size_c, size_z = 1, 1
         size_t = int(np.floor((self.reader.filehandle.size - self.reader.pages[0].dataoffsets[0]) / self.count))
-        pixel_type = model.simple_types.PixelType(self.reader.pages[0].dtype.name)
+        pixel_type = model.PixelType(self.reader.pages[0].dtype.name)
         ome = model.OME()
         ome.instruments.append(model.Instrument())
         ome.images.append(

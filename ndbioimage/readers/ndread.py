@@ -19,12 +19,12 @@ class Reader(AbstractReader, ABC):
             return size_x, size_y, size_c, size_z, size_t
         size_x, size_y, size_c, size_z, size_t = shape(*self.array.shape)
         try:
-            pixel_type = model.simple_types.PixelType(self.array.dtype.name)
+            pixel_type = model.PixelType(self.array.dtype.name)
         except ValueError:
             if self.array.dtype.name.startswith('int'):
-                pixel_type = model.simple_types.PixelType('int32')
+                pixel_type = model.PixelType('int32')
             else:
-                pixel_type = model.simple_types.PixelType('float')
+                pixel_type = model.PixelType('float')
 
         ome = model.OME()
         ome.instruments.append(model.Instrument())

@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from functools import cached_property
 from ome_types import model
-from ome_types._base_type import quantity_property
+from ome_types.units import _quantity_property
 from itertools import product
 from datetime import datetime
 from abc import ABC
@@ -25,7 +25,7 @@ class Plane(model.Plane):
     def __init__(self, t0, file, **kwargs):
         super().__init__(**kwargs)
         setattr(self.__class__, 'delta_t', lazy_property(self.get_delta_t, 'delta_t', 't0', 'file'))
-        setattr(self.__class__, 'delta_t_quantity', quantity_property('delta_t'))
+        setattr(self.__class__, 'delta_t_quantity', _quantity_property('delta_t'))
         self.__dict__['t0'] = t0
         self.__dict__['file'] = file
 
@@ -57,7 +57,7 @@ class Reader(AbstractReader, ABC):
                 id="Objective:0", manufacturer="Zeiss", model=objective_str,
                 nominal_magnification=float(re.findall(r"(\d+)x", objective_str)[0]),
                 lens_na=float(re.findall(r"/(\d\.\d+)", objective_str)[0]),
-                immersion=model.objective.Immersion.OIL if 'oil' in objective_str.lower() else None))
+                immersion=model.Objective_Immersion.OIL if 'oil' in objective_str.lower() else None))
         tubelens_str = metadata["Info"]["ZeissOptovar-Label"]
         ome.instruments[0].objectives.append(
             model.Objective(

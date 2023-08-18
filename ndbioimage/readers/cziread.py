@@ -73,9 +73,9 @@ class Reader(AbstractReader, ABC):
 
         for detector in instrument.find("Detectors"):
             try:
-                detector_type = model.detector.Type(text(detector.find("Type")).upper() or "")
+                detector_type = model.Detector_Type(text(detector.find("Type")).upper() or "")
             except ValueError:
-                detector_type = model.detector.Type.OTHER
+                detector_type = model.Detector_Type.OTHER
 
             ome.instruments[0].detectors.append(
                 model.Detector(
@@ -123,8 +123,8 @@ class Reader(AbstractReader, ABC):
         objective_settings = image.find("ObjectiveSettings")
         scenes = image.find("Dimensions").find("S").find("Scenes")
         center_position = [float(pos) for pos in text(scenes[0].find("CenterPosition")).split(',')]
-        um = model.simple_types.UnitsLength.MICROMETER
-        nm = model.simple_types.UnitsLength.NANOMETER
+        um = model.UnitsLength.MICROMETER
+        nm = model.UnitsLength.NANOMETER
 
         ome.images.append(
             model.Image(
@@ -163,9 +163,9 @@ class Reader(AbstractReader, ABC):
             laser_scan_info = channel.find("LaserScanInfo")
             detector = detector_settings.find("Detector")
             try:
-                binning = model.simple_types.Binning(text(detector_settings.find("Binning")))
+                binning = model.Binning(text(detector_settings.find("Binning")))
             except ValueError:
-                binning = model.simple_types.Binning.OTHER
+                binning = model.Binning.OTHER
 
             light_sources_settings = channel.find("LightSourcesSettings")
             # no space in ome for multiple lightsources simultaneously
@@ -182,7 +182,7 @@ class Reader(AbstractReader, ABC):
                     id=f"Channel:0:{idx}",
                     name=channel.attrib["Name"],
                     acquisition_mode=text(channel.find("AcquisitionMode")),
-                    color=model.simple_types.Color(text(channels_ds[channel.attrib["Id"]].find("Color"))),
+                    color=model.Color(text(channels_ds[channel.attrib["Id"]].find("Color"))),
                     detector_settings=model.DetectorSettings(
                         id=detector.attrib["Id"].replace(" ", ""),
                         binning=binning),
@@ -239,9 +239,9 @@ class Reader(AbstractReader, ABC):
 
         for detector in instrument.find("Detectors"):
             try:
-                detector_type = model.detector.Type(text(detector.find("Type")).upper() or "")
+                detector_type = model.Detector_Type(text(detector.find("Type")).upper() or "")
             except ValueError:
-                detector_type = model.detector.Type.OTHER
+                detector_type = model.Detector_Type.OTHER
 
             ome.instruments[0].detectors.append(
                 model.Detector(
@@ -306,8 +306,8 @@ class Reader(AbstractReader, ABC):
         objective_settings = image.find("ObjectiveSettings")
         scenes = image.find("Dimensions").find("S").find("Scenes")
         positions = scenes[0].find("Positions")[0]
-        um = model.simple_types.UnitsLength.MICROMETER
-        nm = model.simple_types.UnitsLength.NANOMETER
+        um = model.UnitsLength.MICROMETER
+        nm = model.UnitsLength.NANOMETER
 
         ome.images.append(
             model.Image(
@@ -351,9 +351,9 @@ class Reader(AbstractReader, ABC):
             laser_scan_info = channel.find("LaserScanInfo")
             detector = detector_settings.find("Detector")
             try:
-                binning = model.simple_types.Binning(text(detector_settings.find("Binning")))
+                binning = model.Binning(text(detector_settings.find("Binning")))
             except ValueError:
-                binning = model.simple_types.Binning.OTHER
+                binning = model.Binning.OTHER
 
             filterset = text(channels_ts[key].find("BeamSplitters")[0].find("Filter"))
             filterset_idx = [filterset.model for filterset in ome.instruments[0].filter_sets].index(filterset)
@@ -375,7 +375,7 @@ class Reader(AbstractReader, ABC):
                     id=f"Channel:0:{idx}",
                     name=channel.attrib["Name"],
                     acquisition_mode=text(channel.find("AcquisitionMode")),
-                    color=model.simple_types.Color(text(channels_ds[channel.attrib["Id"]].find("Color"))),
+                    color=model.Color(text(channels_ds[channel.attrib["Id"]].find("Color"))),
                     detector_settings=model.DetectorSettings(id=detector.attrib["Id"], binning=binning),
                     emission_wavelength=text(channel.find("EmissionWavelength")),
                     excitation_wavelength=light_source_settings.wavelength,
