@@ -1,3 +1,5 @@
+[![Pytest](https://github.com/wimpomp/ndbioimage/actions/workflows/pytest.yml/badge.svg)](https://github.com/wimpomp/ndbioimage/actions/workflows/pytest.yml)
+
 # ndbioimage - Work in progress
 
 Exposes (bio) images as a numpy ndarray-like-object, but without loading the whole
@@ -55,9 +57,9 @@ with Imread('image_file.tif', axes='cztxy') as im:
 ```
 
 ## Adding more formats
-Readers for image formats subclass Imread. When an image reader is imported, Imread will
+Readers for image formats subclass AbstractReader. When an image reader is imported, Imread will
 automatically recognize it and use it to open the appropriate file format. Image readers
-subclass Imread and are required to implement the following methods:
+are required to implement the following methods:
 
 - staticmethod _can_open(path): return True if path can be opened by this reader
 - property ome: reads metadata from file and adds them to an OME object imported
@@ -65,7 +67,7 @@ from the ome-types library
 - \_\_frame__(self, c, z, t): return the frame at channel=c, z-slice=z, time=t from the file
 
 Optional methods:
-- open(self): maybe open some file
+- open(self): maybe open some file handle
 - close(self): close any file handles
 
 Optional fields:

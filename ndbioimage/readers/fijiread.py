@@ -7,10 +7,10 @@ from pathlib import Path
 from struct import unpack
 from warnings import warn
 import numpy as np
-from .. import Imread
+from .. import AbstractReader
 
 
-class Reader(Imread, ABC):
+class Reader(AbstractReader, ABC):
     """ Can read some tif files written with Fiji which are broken because Fiji didn't finish writing. """
     priority = 90
     do_not_pickle = 'reader'

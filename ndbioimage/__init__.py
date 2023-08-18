@@ -1,5 +1,6 @@
 import re
-import inspect
+import warnings
+
 import pandas
 import yaml
 import numpy as np
@@ -12,7 +13,7 @@ from tqdm.auto import tqdm
 from itertools import product
 from collections import OrderedDict
 from abc import ABCMeta, abstractmethod
-from functools import cached_property
+from functools import cached_property, wraps
 from parfor import parfor
 from tiffwrite import IJTiffFile
 from numbers import Number
@@ -20,6 +21,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 from importlib.metadata import version
 from traceback import print_exc
+from operator import truediv
 from .transforms import Transform, Transforms
 from .jvm import JVM
 
@@ -109,7 +111,7 @@ class ImTransforms(Transforms):
             return ()
 
     def get_bead_files(self):
-        files = sorted([f for f in self.path.parent.iterdir() if f.name.lower().startswith('beads')
+        files = sorted([f for f in self.path.iterdir() if f.name.lower().startswith('beads')
                         and not f.suffix.lower() == '.pdf' and not f.suffix.lower() == 'pkl'])
         if not files:
             raise Exception('No bead file found!')
@@ -142,7 +144,7 @@ class ImTransforms(Transforms):
             else:
                 masterch = goodch[0]
             transform = Transform()
-            if not np.any(good_and_untrans):
+            if not good_and_untrans:
                 matrix = transform.matrix
                 matrix[0, 0] = 0.86
                 transform.matrix = matrix
@@ -180,7 +182,7 @@ class ImTransforms(Transforms):
 
 
 class ImShiftTransforms(Transforms):
-    """ Class to handle drift in xy. The image this is applied to must have a channeltransform already, which is then
+    """ Class to handle drift in xy. The image this is applied to must have a channel transform already, which is then
         replaced by this class. """
 
     def __init__(self, im, shifts=None):
@@ -324,6 +326,8 @@ def get_ome(path):
 
 class Shape(tuple):
     def __new__(cls, shape, axes='xyczt'):
+        if isinstance(shape, Shape):
+            axes = shape.axes
         instance = super().__new__(cls, shape)
         instance.axes = axes.lower()
         return instance
@@ -341,7 +345,843 @@ class Shape(tuple):
         return tuple(self[i] for i in 'xyczt')
 
 
-class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
+class Imread(np.lib.mixins.NDArrayOperatorsMixin):
+
+    def __new__(cls, path=None, *args, **kwargs):
+        if cls is not Imread:
+            return super().__new__(cls)
+        if len(AbstractReader.__subclasses__()) == 0:
+            raise Exception('Restart python kernel please!')
+        if isinstance(path, Imread):
+            return path
+        path, _ = AbstractReader.split_path_series(path)
+        for subclass in sorted(AbstractReader.__subclasses__(), key=lambda subclass_: subclass_.priority):
+            if subclass._can_open(path):
+                do_not_pickle = (AbstractReader.do_not_pickle,) if isinstance(AbstractReader.do_not_pickle, str) \
+                    else AbstractReader.do_not_pickle
+                subclass_do_not_pickle = (subclass.do_not_pickle,) if isinstance(subclass.do_not_pickle, str) \
+                    else subclass.do_not_pickle if hasattr(subclass, 'do_not_pickle') else ()
+                subclass.do_not_pickle = set(do_not_pickle).union(set(subclass_do_not_pickle))
+
+                return super().__new__(subclass)
+        raise ReaderNotFoundError(f'No reader found for {path}.')
+
+    def __init__(self, base=None, slice=None, shape=(0, 0, 0, 0, 0), dtype=None,
+                 transform=False, drift=False, beadfile=None):
+        self.base = base
+        self.slice = slice
+        self._shape = Shape(shape)
+        self.dtype = dtype
+        self.views = []
+        self._frame_decorator = None
+
+        self.transform = transform
+        self.drift = drift
+        self.beadfile = beadfile
+
+        self.flags = dict(C_CONTIGUOUS=False, F_CONTIGUOUS=False, OWNDATA=False, WRITEABLE=False,
+                          ALIGNED=False, WRITEBACKIFCOPY=False, UPDATEIFCOPY=False)
+
+    def __call__(self, c=None, z=None, t=None, x=None, y=None):
+        """ same as im[] but allowing keyword axes, but slices need to made with slice() or np.s_ """
+        return self[{k: slice(v) if v is None else v for k, v in dict(c=c, z=z, t=t, x=x, y=y).items()}]
+
+    def __copy__(self):
+        return self.copy()
+
+    def __contains__(self, item):
+        def unique_yield(a, b):
+            for k in a:
+                yield k
+            for k in b:
+                if k not in a:
+                    yield k
+
+        for idx in unique_yield(list(self.cache.keys()),
+                                product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t']))):
+            xyczt = (slice(None), slice(None)) + idx
+            in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+            if item in np.asarray(self[in_idx]):
+                return True
+        return False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        exception = None
+        for view in self.views:
+            try:
+                view.__exit__()
+            except Exception as e:
+                exception = e
+        self.views = []
+        if hasattr(self, 'close') and not self.isclosed:
+            self.close()
+        self.isclosed = True
+        if exception:
+            raise exception
+
+    def __getitem__(self, n):
+        """ slice like a numpy array but return an Imread instance """
+        if self.isclosed:
+            raise IOError("file is closed")
+        if isinstance(n, (slice, Number)):  # None = :
+            n = (n,)
+        elif isinstance(n, type(Ellipsis)):
+            n = (None,) * len(self.axes)
+        elif isinstance(n, dict):  # allow im[dict(z=0)] etc.
+            n = [n.get(i, slice(None)) for i in self.axes]
+        n = list(n)
+
+        # deal with ...
+        ell = [i for i, e in enumerate(n) if isinstance(e, type(Ellipsis))]
+        if len(ell) > 1:
+            raise IndexError('an index can only have a single ellipsis (...)')
+        if len(ell):
+            if len(n) > self.ndim:
+                n.remove(Ellipsis)
+            else:
+                n[ell[0]] = None
+                while len(n) < self.ndim:
+                    n.insert(ell[0], None)
+        while len(n) < self.ndim:
+            n.append(None)
+
+        axes_idx = [self.shape.axes.find(i) for i in 'xyczt']
+        n = [n[j] if 0 <= j < len(n) else None for j in axes_idx]  # reorder n
+
+        new_slice = []
+        for s, e in zip(self.slice, n):
+            if e is None:
+                new_slice.append(s)
+            else:
+                new_slice.append(s[e])
+
+        # TODO: check output dimensionality when requested shape in some dimension is 1
+        if all([isinstance(s, Number) or s.size == 1 for s in new_slice]):
+            return self.block(*new_slice).item()
+        else:
+            new = View(self)
+            new.slice = new_slice
+            new._shape = Shape([1 if isinstance(s, Number) else len(s) for s in new_slice])
+            new.axes = ''.join(j for j in self.axes if j in [i for i, s in zip('xyczt', new_slice)
+                                                             if not isinstance(s, Number)])
+            return new
+
+    def __getstate__(self):
+        return {key: value for key, value in self.__dict__.items() if key not in self.do_not_pickle}
+
+    def __len__(self):
+        return self.shape[0]
+
+    def __repr__(self):
+        return self.summary
+
+    def __setstate__(self, state):
+        """ What happens during unpickling """
+        self.__dict__.update(state)
+        if isinstance(self, AbstractReader):
+            self.open()
+        self.views = []
+        self.cache = DequeDict(16)
+
+    def __str__(self):
+        return str(self.path)
+
+
+
+    # TODO: this is causing problems when multiprocessing and doesn't work anyway
+    # def __del__(self):
+    #     if not self.copies:
+    #         if self.base is None:
+    #             self.__exit__()
+    #         else:
+    #             self.base.views.remove(self)
+
+    def __array__(self, dtype=None):
+        block = self.block(*self.slice)
+        axes_idx = [self.shape.axes.find(i) for i in 'xyczt']
+        axes_squeeze = tuple({i for i, j in enumerate(axes_idx) if j == -1}.union(
+            {i for i, j in enumerate(self.slice) if isinstance(j, Number)}))
+        block = block.squeeze(axes_squeeze)
+        if dtype is not None:
+            block = block.astype(dtype)
+        if block.ndim == 0:
+            return block.item()
+        axes = ''.join(j for i, j in enumerate('xyczt') if i not in axes_squeeze)
+        return block.transpose([axes.find(i) for i in self.shape.axes if i in axes])
+
+    def __array_arg_fun__(self, fun, axis=None, out=None):
+        """ frame-wise application of np.argmin and np.argmax """
+        if axis is None:
+            value = arg = None
+            for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
+                xyczt = (slice(None), slice(None)) + idx
+                in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+                new = np.asarray(self[in_idx])
+                new_arg = np.unravel_index(fun(new), new.shape)
+                new_value = new[new_arg]
+                if value is None:
+                    arg = new_arg + idx
+                    value = new_value
+                else:
+                    i = fun((value, new_value))
+                    arg = (arg, new_arg + idx)[i]
+                    value = (value, new_value)[i]
+            axes = ''.join(i for i in self.axes if i in 'xy') + 'czt'
+            arg = np.ravel_multi_index([arg[axes.find(i)] for i in self.axes], self.shape)
+            if out is None:
+                return arg
+            else:
+                out.itemset(arg)
+                return out
+        else:
+            if isinstance(axis, str):
+                axis_str, axis_idx = axis, self.axes.index(axis)
+            else:
+                axis_str, axis_idx = self.axes[axis], axis
+            if axis_str not in self.axes:
+                raise IndexError(f'Axis {axis_str} not in {self.axes}.')
+            out_shape = list(self.shape)
+            out_axes = list(self.axes)
+            out_shape.pop(axis_idx)
+            out_axes.pop(axis_idx)
+            if out is None:
+                out = np.zeros(out_shape, int)
+            if axis_str in 'xy':
+                for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
+                    xyczt = (slice(None), slice(None)) + idx
+                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
+                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+                    new = self[in_idx]
+                    out[out_idx] = fun(np.asarray(new), new.axes.find(axis_str))
+            else:
+                value = np.zeros(out.shape, self.dtype)
+                for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
+                    xyczt = (slice(None), slice(None)) + idx
+                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
+                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+                    new_value = self[in_idx]
+                    new_arg = np.full_like(new_value, idx['czt'.find(axis_str)])
+                    if idx['czt'.find(axis_str)] == 0:
+                        value[out_idx] = new_value
+                        out[out_idx] = new_arg
+                    else:
+                        old_value = value[out_idx]
+                        i = fun((old_value, new_value), 0)
+                        value[out_idx] = np.where(i, new_value, old_value)
+                        out[out_idx] = np.where(i, new_arg, out[out_idx])
+            return out
+
+    def __array_fun__(self, funs, axis=None, dtype=None, out=None, keepdims=False, initials=None, where=True,
+                      ffuns=None, cfun=None):
+        """ frame-wise application of np.min, np.max, np.sum, np.mean and their nan equivalents """
+        p = re.compile(r'\d')
+        dtype = self.dtype if dtype is None else np.dtype(dtype)
+        if initials is None:
+            initials = [None for _ in funs]
+        if ffuns is None:
+            ffuns = [None for _ in funs]
+
+        def ffun_(frame):
+            return np.asarray(frame)
+        ffuns = [ffun_ if ffun is None else ffun for ffun in ffuns]
+        if cfun is None:
+            def cfun(*res):
+                return res[0]
+
+        # TODO: smarter transforms
+        if axis is None:
+            for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
+                xyczt = (slice(None), slice(None)) + idx
+                in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+                w = where if where is None or isinstance(where, bool) else where[in_idx]
+                initials = [fun(np.asarray(ffun(self[in_idx])), initial=initial, where=w)
+                            for fun, ffun, initial in zip(funs, ffuns, initials)]
+            res = cfun(*initials)
+            res = (np.round(res) if dtype.kind in 'ui' else res).astype(p.sub('', dtype.name))
+            if keepdims:
+                res = np.array(res, dtype, ndmin=self.ndim)
+            if out is None:
+                return res
+            else:
+                out.itemset(res)
+                return out
+        else:
+            if isinstance(axis, str):
+                axis_str, axis_idx = axis, self.axes.index(axis)
+            else:
+                axis_idx = axis % self.ndim
+                axis_str = self.axes[axis_idx]
+            if axis_str not in self.axes:
+                raise IndexError(f'Axis {axis_str} not in {self.axes}.')
+            out_shape = list(self.shape)
+            out_axes = list(self.axes)
+            if not keepdims:
+                out_shape.pop(axis_idx)
+                out_axes.pop(axis_idx)
+            if out is None:
+                out = np.zeros(out_shape, dtype)
+            if axis_str in 'xy':
+                xy = 'xy' if self.axes.find('x') < self.axes.find('y') else 'yx'
+                frame_ax = xy.find(axis_str)
+                for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
+                    xyczt = (slice(None), slice(None)) + idx
+                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
+                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+                    w = where if where is None or isinstance(where, bool) else where[in_idx]
+                    res = cfun(*[fun(ffun(self[in_idx]), frame_ax, initial=initial, where=w)
+                                 for fun, ffun, initial in zip(funs, ffuns, initials)])
+                    out[out_idx] = (np.round(res) if out.dtype.kind in 'ui' else res).astype(p.sub('', dtype.name))
+            else:
+                tmps = [np.zeros(out_shape) for _ in ffuns]
+                for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
+                    xyczt = (slice(None), slice(None)) + idx
+                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
+                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+
+                    if idx['czt'.find(axis_str)] == 0:
+                        w = where if where is None or isinstance(where, bool) else (where[in_idx],)
+                        for tmp, fun, ffun, initial in zip(tmps, funs, ffuns, initials):
+                            tmp[out_idx] = fun((ffun(self[in_idx]),), 0, initial=initial, where=w)
+                    else:
+                        w = where if where is None or isinstance(where, bool) else \
+                            (np.ones_like(where[in_idx]), where[in_idx])
+                        for tmp, fun, ffun in zip(tmps, funs, ffuns):
+                            tmp[out_idx] = fun((tmp[out_idx], ffun(self[in_idx])), 0, where=w)
+                out[...] = (np.round(cfun(*tmps)) if out.dtype.kind in 'ui' else
+                            cfun(*tmps)).astype(p.sub('', dtype.name))
+            return out
+
+    def __framet__(self, c, z, t):
+        return self.transform_frame(self.__frame__(c, z, t), c, t)
+
+    @property
+    def axes(self):
+        return self.shape.axes
+
+    @axes.setter
+    def axes(self, value):
+        shape = self.shape[value]
+        if isinstance(shape, Number):
+            shape = (shape,)
+        self._shape = Shape(shape, value)
+
+    @property
+    def dtype(self):
+        return self._dtype
+
+    @dtype.setter
+    def dtype(self, value):
+        self._dtype = np.dtype(value)
+
+    @cached_property
+    def extrametadata(self):
+        if isinstance(self.path, Path):
+            if self.path.with_suffix('.pzl2').exists():
+                pname = self.path.with_suffix('.pzl2')
+            elif self.path.with_suffix('.pzl').exists():
+                pname = self.path.with_suffix('.pzl')
+            else:
+                return
+            try:
+                return self.get_config(pname)
+            except (Exception,):
+                return
+        return
+
+    @property
+    def frame_decorator(self):
+        return self._frame_decorator
+
+    @frame_decorator.setter
+    def frame_decorator(self, decorator):
+        self._frame_decorator = decorator
+        self.cache = DequeDict(self.cache.maxlen)
+
+    @property
+    def ndim(self):
+        return len(self.shape)
+
+    @cached_property
+    def piezoval(self):
+        """ gives the height of the piezo and focus motor, only available when CylLensGUI was used """
+
+        def upack(idx):
+            time = list()
+            val = list()
+            if len(idx) == 0:
+                return time, val
+            for i in idx:
+                time.append(int(re.search(r'\d+', n[i]).group(0)))
+                val.append(w[i])
+            return zip(*sorted(zip(time, val)))
+
+        # Maybe the values are stored in the metadata
+        n = self.metadata.search('LsmTag|Name')[0]
+        w = self.metadata.search('LsmTag')[0]
+        if n is not None:
+            # n = self.metadata['LsmTag|Name'][1:-1].split(', ')
+            # w = str2float(self.metadata['LsmTag'][1:-1].split(', '))
+
+            pidx = np.where([re.search(r'^Piezo\s\d+$', x) is not None for x in n])[0]
+            sidx = np.where([re.search(r'^Zstage\s\d+$', x) is not None for x in n])[0]
+
+            ptime, pval = upack(pidx)
+            stime, sval = upack(sidx)
+
+        # Or maybe in an extra '.pzl' file
+        else:
+            m = self.extrametadata
+            if m is not None and 'p' in m:
+                q = np.array(m['p'])
+                if not len(q.shape):
+                    q = np.zeros((1, 3))
+
+                ptime = [int(i) for i in q[:, 0]]
+                pval = [float(i) for i in q[:, 1]]
+                sval = [float(i) for i in q[:, 2]]
+
+            else:
+                ptime = []
+                pval = []
+                sval = []
+
+        df = pandas.DataFrame(columns=['frame', 'piezoZ', 'stageZ'])
+        df['frame'] = ptime
+        df['piezoZ'] = pval
+        df['stageZ'] = np.array(sval) - np.array(pval) - \
+                       self.metadata.re_search(r'AcquisitionModeSetup\|ReferenceZ', 0)[0] * 1e6
+
+        # remove duplicates
+        df = df[~df.duplicated('frame', 'last')]
+        return df
+
+    @property
+    def size(self):
+        return np.prod(self.shape)
+
+    @property
+    def shape(self):
+        return self._shape
+
+    @shape.setter
+    def shape(self, value):
+        if isinstance(value, Shape):
+            self._shape = value
+        else:
+            self._shape = Shape((value['xyczt'.find(i.lower())] for i in self.axes), self.axes)
+
+    @property
+    def summary(self):
+        """ gives a helpful summary of the recorded experiment """
+        s = [f"path/filename: {self.path}",
+             f"series/pos:    {self.series}"]
+        if isinstance(self, View):
+            s.append(f"reader:        {self.base.__class__.__module__.split('.')[-1]} view")
+        else:
+            s.append(f"reader:        {self.__class__.__module__.split('.')[-1]} base")
+        s.extend((f"dtype:         {self.dtype}",
+                  f"shape ({self.axes}):".ljust(15) + f"{' x '.join(str(i) for i in self.shape)}"))
+        if self.pxsize_um:
+            s.append(f'pixel size:    {1000 * self.pxsize_um:.2f} nm')
+        if self.zstack and self.deltaz_um:
+            s.append(f'z-interval:    {1000 * self.deltaz_um:.2f} nm')
+        if self.exposuretime_s and not all(e is None for e in self.exposuretime_s):
+            s.append(f'exposuretime:  {self.exposuretime_s[0]:.2f} s')
+        if self.timeseries and self.timeinterval:
+            s.append(f'time interval: {self.timeinterval:.3f} s')
+        if self.binning:
+            s.append('binning:       {}x{}'.format(*self.binning))
+        if self.laserwavelengths:
+            s.append('laser colors:  ' + ' | '.join([' & '.join(len(w) * ('{:.0f}',)).format(*w)
+                                                     for w in self.laserwavelengths]) + ' nm')
+        if self.laserpowers:
+            s.append('laser powers:  ' + ' | '.join([' & '.join(len(p) * ('{:.3g}',)).format(*[100 * i for i in p])
+                                                     for p in self.laserpowers]) + ' %')
+        if self.objective:
+            s.append('objective:     {}'.format(self.objective.model))
+        if self.magnification:
+            s.append('magnification: {}x'.format(self.magnification))
+        if self.tubelens:
+            s.append('tubelens:      {}'.format(self.tubelens.model))
+        if self.filter:
+            s.append('filterset:     {}'.format(self.filter))
+        if self.powermode:
+            s.append('powermode:     {}'.format(self.powermode))
+        if self.collimator:
+            s.append('collimator:   ' + (' {}' * len(self.collimator)).format(*self.collimator))
+        if self.tirfangle:
+            s.append('TIRF angle:   ' + (' {:.2f}°' * len(self.tirfangle)).format(*self.tirfangle))
+        if self.gain:
+            s.append('gain:         ' + (' {:.0f}' * len(self.gain)).format(*self.gain))
+        if self.pcf:
+            s.append('pcf:          ' + (' {:.2f}' * len(self.pcf)).format(*self.pcf))
+        return '\n'.join(s)
+
+    @property
+    def T(self):
+        return self.transpose()
+
+    @cached_property
+    def timeseries(self):
+        return self.shape['t'] > 1
+
+    @cached_property
+    def zstack(self):
+        return self.shape['z'] > 1
+
+    @wraps(np.argmax)
+    def argmax(self, *args, **kwargs):
+        return self.__array_arg_fun__(np.argmax, *args, **kwargs)
+
+    @wraps(np.argmin)
+    def argmin(self, *args, **kwargs):
+        return self.__array_arg_fun__(np.argmin, *args, **kwargs)
+
+    @wraps(np.max)
+    def max(self, axis=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+        return self.__array_fun__([np.max], axis, None, out, keepdims, [initial], where)
+
+    @wraps(np.mean)
+    def mean(self, axis=None, dtype=None, out=None, keepdims=False, *, where=True, **kwargs):
+        dtype = dtype or float
+        n = np.prod(self.shape) if axis is None else self.shape[axis]
+
+        def sfun(frame):
+            return np.asarray(frame).astype(float)
+
+        def cfun(res):
+            return res / n
+
+        return self.__array_fun__([np.sum], axis, dtype, out, keepdims, None, where, [sfun], cfun)
+
+    @wraps(np.min)
+    def min(self, axis=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+        return self.__array_fun__([np.min], axis, None, out, keepdims, [initial], where)
+
+    @wraps(np.moveaxis)
+    def moveaxis(self, source, destination):
+        raise NotImplementedError('moveaxis is not implemented')
+
+    @wraps(np.nanmax)
+    def nanmax(self, axis=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+        return self.__array_fun__([np.nanmax], axis, None, out, keepdims, [initial], where)
+
+    @wraps(np.nanmean)
+    def nanmean(self, axis=None, dtype=None, out=None, keepdims=False, *, where=True, **kwargs):
+        dtype = dtype or float
+
+        def sfun(frame):
+            return np.asarray(frame).astype(float)
+
+        def nfun(frame):
+            return np.invert(np.isnan(frame))
+
+        return self.__array_fun__([np.nansum, np.sum], axis, dtype, out, keepdims, None, where, (sfun, nfun), truediv)
+
+    @wraps(np.nanmin)
+    def nanmin(self, axis=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+        return self.__array_fun__([np.nanmin], axis, None, out, keepdims, [initial], where)
+
+    @wraps(np.nansum)
+    def nansum(self, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+        return self.__array_fun__([np.nansum], axis, dtype, out, keepdims, [initial], where)
+
+    @wraps(np.nanstd)
+    def nanstd(self, axis=None, dtype=None, out=None, ddof=0, keepdims=None, *, where=None):
+        return self.nanvar(axis, dtype, out, ddof, keepdims, where=where, std=True)
+
+    @wraps(np.nanvar)
+    def nanvar(self, axis=None, dtype=None, out=None, ddof=0, keepdims=None, *, where=True, std=False):
+        dtype = dtype or float
+
+        def sfun(frame):
+            return np.asarray(frame).astype(float)
+
+        def s2fun(frame):
+            return np.asarray(frame).astype(float) ** 2
+
+        def nfun(frame):
+            return np.invert(np.isnan(frame))
+
+        if std:
+            def cfun(s, s2, n):
+                return np.sqrt((s2 - s ** 2 / n) / (n - ddof))
+        else:
+            def cfun(s, s2, n):
+                return (s2 - s ** 2 / n) / (n - ddof)
+        return self.__array_fun__([np.nansum, np.nansum, np.sum], axis, dtype, out, keepdims, None, where,
+                                  (sfun, s2fun, nfun), cfun)
+
+    @wraps(np.reshape)
+    def reshape(self, *args, **kwargs):
+        return np.asarray(self).reshape(*args, **kwargs)
+
+    @wraps(np.squeeze)
+    def squeeze(self, axes=None):
+        new = self.copy()
+        if axes is None:
+            axes = tuple(i for i, j in enumerate(new.shape) if j == 1)
+        elif isinstance(axes, Number):
+            axes = (axes,)
+        else:
+            axes = tuple(new.axes.find(ax) if isinstance(ax, str) else ax for ax in axes)
+        if any([new.shape[ax] != 1 for ax in axes]):
+            raise ValueError('cannot select an axis to squeeze out which has size not equal to one')
+        new.axes = ''.join(j for i, j in enumerate(new.axes) if i not in axes)
+        return new
+
+    @wraps(np.std)
+    def std(self, axis=None, dtype=None, out=None, ddof=0, keepdims=None, *, where=True):
+        return self.var(axis, dtype, out, ddof, keepdims, where=where, std=True)
+
+    @wraps(np.sum)
+    def sum(self, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+        return self.__array_fun__([np.sum], axis, dtype, out, keepdims, [initial], where)
+    @wraps(np.swapaxes)
+    def swapaxes(self, axis1, axis2):
+        new = self.copy()
+        axes = new.axes
+        if isinstance(axis1, str):
+            axis1 = axes.find(axis1)
+        if isinstance(axis2, str):
+            axis2 = axes.find(axis2)
+        axes[axis1], axes[axis2] = axes[axis2], axes[axis1]
+        new.axes = axes
+        return new
+
+    @wraps(np.transpose)
+    def transpose(self, axes=None):
+        new = self.copy()
+        if axes is None:
+            new.axes = new.axes[::-1]
+        else:
+            new.axes = ''.join(ax if isinstance(ax, str) else new.axes[ax] for ax in axes)
+        return new
+
+    @wraps(np.var)
+    def var(self, axis=None, dtype=None, out=None, ddof=0, keepdims=None, *, where=True, std=False):
+        dtype = dtype or float
+        n = np.prod(self.shape) if axis is None else self.shape[axis]
+
+        def sfun(frame):
+            return np.asarray(frame).astype(float)
+
+        def s2fun(frame):
+            return np.asarray(frame).astype(float) ** 2
+
+        if std:
+            def cfun(s, s2):
+                return np.sqrt((s2 - s ** 2 / n) / (n - ddof))
+        else:
+            def cfun(s, s2):
+                return (s2 - s ** 2 / n) / (n - ddof)
+        return self.__array_fun__([np.sum, np.sum], axis, dtype, out, keepdims, None, where, (sfun, s2fun), cfun)
+
+    def asarray(self):
+        return self.__array__()
+
+    def astype(self, dtype):
+        new = self.copy()
+        new.dtype = dtype
+        return new
+
+    def block(self, x=None, y=None, c=None, z=None, t=None):
+        """ returns 5D block of frames """
+        x, y, c, z, t = [np.arange(self.shape[i]) if e is None else np.array(e, ndmin=1)
+                         for i, e in zip('xyczt', (x, y, c, z, t))]
+        d = np.full((len(x), len(y), len(c), len(z), len(t)), np.nan, self.dtype)
+        for (ci, cj), (zi, zj), (ti, tj) in product(enumerate(c), enumerate(z), enumerate(t)):
+            d[:, :, ci, zi, ti] = self.frame(cj, zj, tj)[x][:, y]
+        return d
+
+    def copy(self):
+        return View(self)
+
+    def data(self, c=0, z=0, t=0):
+        """ returns 3D stack of frames """
+        c, z, t = [np.arange(self.shape[i]) if e is None else np.array(e, ndmin=1) for i, e in zip('czt', (c, z, t))]
+        return np.dstack([self.frame(ci, zi, ti) for ci, zi, ti in product(c, z, t)])
+
+    def frame(self, c=0, z=0, t=0):
+        """ returns single 2D frame """
+        c = self.get_channel(c)
+        c %= self.base.shape['c']
+        z %= self.base.shape['z']
+        t %= self.base.shape['t']
+
+        # cache last n (default 16) frames in memory for speed (~250x faster)
+        key = (c, z, t, self.transform is None, self.frame_decorator is None)
+        if key in self.cache:
+            self.cache.move_to_end(key)
+            f = self.cache[key]
+        else:
+            f = self.__framet__(c, z, t)
+            if self.frame_decorator is not None:
+                f = self.frame_decorator(self, f, c, z, t)
+            self.cache[key] = f
+        if self.dtype is not None:
+            return f.copy().astype(self.dtype)
+        else:
+            return f.copy()
+
+    def get_channel(self, channel_name):
+        if not isinstance(channel_name, str):
+            return channel_name
+        else:
+            c = [i for i, c in enumerate(self.cnamelist) if c.lower().startswith(channel_name.lower())]
+            assert len(c) > 0, 'Channel {} not found in {}'.format(c, self.cnamelist)
+            assert len(c) < 2, 'Channel {} not unique in {}'.format(c, self.cnamelist)
+            return c[0]
+
+    @staticmethod
+    def get_config(file):
+        """ Open a yml config file """
+        loader = yaml.SafeLoader
+        loader.add_implicit_resolver(
+            r'tag:yaml.org,2002:float',
+            re.compile(r'''^(?:
+                     [-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+]?[0-9]+)?
+                    |[-+]?(?:[0-9][0-9_]*)(?:[eE][-+]?[0-9]+)
+                    |\.[0-9_]+(?:[eE][-+][0-9]+)?
+                    |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*
+                    |[-+]?\\.(?:inf|Inf|INF)
+                    |\.(?:nan|NaN|NAN))$''', re.X),
+            list(r'-+0123456789.'))
+        with open(file, 'r') as f:
+            return yaml.load(f, loader)
+
+    def get_czt(self, c, z, t):
+        czt = []
+        for i, n in zip('czt', (c, z, t)):
+            if n is None:
+                czt.append(list(range(self.shape[i])))
+            elif isinstance(n, range):
+                if n.stop < 0:
+                    stop = n.stop % self.shape[i]
+                elif n.stop > self.shape[i]:
+                    stop = self.shape[i]
+                else:
+                    stop = n.stop
+                czt.append(list(range(n.start % self.shape[i], stop, n.step)))
+            elif isinstance(n, Number):
+                czt.append([n % self.shape[i]])
+            else:
+                czt.append([k % self.shape[i] for k in n])
+        return [self.get_channel(c) for c in czt[0]], *czt[1:]
+
+    @staticmethod
+    def get_ome(path):
+        """ Use java BioFormats to make an ome metadata structure. """
+        with multiprocessing.get_context('spawn').Pool(1) as pool:
+            ome = pool.map(get_ome, (path,))[0]
+            return ome
+
+    def is_noise(self, volume=None):
+        """ True if volume only has noise """
+        if volume is None:
+            volume = self
+        fft = np.fft.fftn(volume)
+        corr = np.fft.fftshift(np.fft.ifftn(fft * fft.conj()).real / np.sum(volume ** 2))
+        return -np.log(1 - corr[tuple([0] * corr.ndim)]) > 5
+
+    @staticmethod
+    def kill_vm():
+        JVM().kill_vm()
+
+    def new(self, *args, **kwargs):
+        warnings.warn('Imread.new has been deprecated, use Imread.view instead.', DeprecationWarning, 2)
+        return self.view(*args, **kwargs)
+
+    def save_as_tiff(self, fname=None, c=None, z=None, t=None, split=False, bar=True, pixel_type='uint16', **kwargs):
+        """ saves the image as a tif file
+            split: split channels into different files """
+        if fname is None:
+            fname = self.path.with_suffix('.tif')
+            if fname == self.path:
+                raise FileExistsError(f'File {fname} exists already.')
+        if not isinstance(fname, Path):
+            fname = Path(fname)
+        if split:
+            for i in range(self.shape['c']):
+                if self.timeseries:
+                    self.save_as_tiff(fname.with_name(f'{fname.stem}_C{i:01d}').with_suffix('.tif'), i, 0, None, False,
+                                      bar, pixel_type)
+                else:
+                    self.save_as_tiff(fname.with_name(f'{fname.stem}_C{i:01d}').with_suffix('.tif'), i, None, 0, False,
+                                      bar, pixel_type)
+        else:
+            n = [c, z, t]
+            for i, ax in enumerate('czt'):
+                if n[i] is None:
+                    n[i] = range(self.shape[ax])
+                elif not isinstance(n[i], (tuple, list)):
+                    n[i] = (n[i],)
+
+            shape = [len(i) for i in n]
+            at_least_one = False
+            with IJTiffFile(fname.with_suffix('.tif'), shape, pixel_type,
+                            pxsize=self.pxsize_um, deltaz=self.deltaz_um, **kwargs) as tif:
+                for i, m in tqdm(zip(product(*[range(s) for s in shape]), product(*n)),
+                                 total=np.prod(shape), desc='Saving tiff', disable=not bar):
+                    if np.any(self(*m)) or not at_least_one:
+                        tif.save(self(*m), *i)
+                        at_least_one = True
+
+    def set_transform(self):
+        # handle transforms
+        if self.transform is False or self.transform is None:
+            self.transform = None
+        else:
+            if isinstance(self.transform, Transforms):
+                self.transform = self.transform
+            else:
+                if isinstance(self.transform, str):
+                    self.transform = ImTransforms(self.path, self.cyllens, self.transform)
+                else:
+                    self.transform = ImTransforms(self.path, self.cyllens, self.beadfile)
+                if self.drift is True:
+                    self.transform = ImShiftTransforms(self)
+                elif not (self.drift is False or self.drift is None):
+                    self.transform = ImShiftTransforms(self, self.drift)
+            self.transform.adapt(self.frameoffset, self.shape.xyczt)
+            self.beadfile = self.transform.files
+
+    @staticmethod
+    def split_path_series(path):
+        if isinstance(path, str):
+            path = Path(path)
+        if isinstance(path, Path) and path.name.startswith('Pos'):
+            return path.parent, int(path.name.lstrip('Pos'))
+        return path, 0
+
+    def transform_frame(self, frame, c, t=0):
+        if self.transform is None:
+            return frame
+        else:
+            return self.transform[(self.cnamelist[c],)].frame(frame)
+
+    def view(self, *args, **kwargs):
+        return View(self, *args, **kwargs)
+
+
+class View(Imread):
+    def __init__(self, base, dtype=None, transform=None, drift=None, beadfile=None):
+        super().__init__(base.base, base.slice, base.shape, dtype or base.dtype, transform or base.transform,
+                         drift or base.drift, beadfile or base.beadfile)
+        base.views.append(self)
+        self.set_transform()
+
+    def __getattr__(self, item):
+        if not hasattr(self.base, item):
+            raise AttributeError(f'{self.__class__} object has no attribute {item}')
+        return self.base.__getattribute__(item)
+
+
+
+class AbstractReader(Imread, metaclass=ABCMeta):
     """ class to read image files, while taking good care of important metadata,
             currently optimized for .czi files, but can open anything that bioformats can handle
         path: path to the image file
@@ -396,14 +1236,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
                 Any other method can be overridden as needed
         wp@tl2019-2023 """
 
-    # TODO: more numpy.ndarray methods as needed
-    # TODO: imread.std
-    # TODO: metadata in OME format tree
-
     priority = 99
-    do_not_pickle = 'base', 'copies', 'cache'
-    do_not_copy = 'extrametadata'
-    do_copy = 'ome'
+    do_not_pickle = 'cache'
     ureg = ureg
 
     @staticmethod
@@ -426,56 +1260,11 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
     def close(self):  # Optionally override this, close file handles etc.
         return
 
-    @staticmethod
-    def get_ome(path):
-        """ Use java BioFormats to make an ome metadata structure. """
-        with multiprocessing.get_context('spawn').Pool(1) as pool:
-            ome = pool.map(get_ome, (path,))[0]
-            return ome
-
-    def __new__(cls, path=None, *args, **kwargs):
-        if cls is not Imread:
-            return super().__new__(cls)
-        if len(cls.__subclasses__()) == 0:
-            raise Exception('Restart python kernel please!')
-        if isinstance(path, Imread):
-            return path
-        path, _ = Imread.split_path_series(path)
-        for subclass in sorted(cls.__subclasses__(), key=lambda subclass_: subclass_.priority):
-            if subclass._can_open(path):
-                do_not_pickle = (cls.do_not_pickle,) if isinstance(cls.do_not_pickle, str) else cls.do_not_pickle
-                subclass_do_not_pickle = (subclass.do_not_pickle,) if isinstance(subclass.do_not_pickle, str) \
-                    else subclass.do_not_pickle if hasattr(subclass, 'do_not_pickle') else ()
-                subclass.do_not_pickle = set(do_not_pickle).union(set(subclass_do_not_pickle))
-
-                do_not_copy = (cls.do_not_copy,) if isinstance(cls.do_not_copy, str) else cls.do_not_copy
-                subclass_do_not_copy = (subclass.do_not_copy,) if isinstance(subclass.do_not_copy, str) \
-                    else subclass.do_not_copy if hasattr(subclass, 'do_not_copy') else ()
-                subclass.do_not_copy = set(do_not_copy).union(set(subclass_do_not_copy))
-
-                do_copy = (cls.do_copy,) if isinstance(cls.do_copy, str) else cls.do_copy
-                subclass_do_copy = (subclass.do_copy,) if isinstance(subclass.do_copy, str) \
-                    else subclass.do_copy if hasattr(subclass, 'do_copy') else ()
-                subclass.do_copy = set(do_copy).union(set(subclass_do_copy))
-
-                return super().__new__(subclass)
-        raise ReaderNotFoundError(f'No reader found for {path}.')
-
-    @staticmethod
-    def split_path_series(path):
-        if isinstance(path, str):
-            path = Path(path)
-        if isinstance(path, Path) and path.name.startswith('Pos'):
-            return path.parent, int(path.name.lstrip('Pos'))
-        return path, 0
-
     def __init__(self, path, transform=False, drift=False, beadfile=None, dtype=None, axes=None):
         if isinstance(path, Imread):
             return
+        super().__init__(self, transform=transform, drift=drift, beadfile=beadfile)
         self.isclosed = False
-        self._shape = Shape((0, 0, 0, 0, 0))
-        self.base = None
-        self.copies = []
         if isinstance(path, str):
             path = Path(path)
         self.path, self.series = self.split_path_series(path)
@@ -485,11 +1274,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         else:  # ndarray
             self.title = 'ndarray'
             self.acquisitiondate = 'now'
-        self.transform = transform
-        self.drift = drift
-        self.beadfile = beadfile
-        self.reader = None
 
+        self.reader = None
         self.pcf = None
         self.powermode = None
         self.collimator = None
@@ -499,10 +1285,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
         self.detector = [0, 1]
         self.track = [0]
         self.cache = DequeDict(16)
-        self._frame_decorator = None
         self.frameoffset = 0, 0  # how far apart the centers of frame and sensor are
-        self.flags = dict(C_CONTIGUOUS=False, F_CONTIGUOUS=False, OWNDATA=False, WRITEABLE=False,
-                          ALIGNED=False, WRITEBACKIFCOPY=False, UPDATEIFCOPY=False)
+
         self.open()
         # extract some metadata from ome
         instrument = self.ome.instruments[0] if self.ome.instruments else None
@@ -568,7 +1352,6 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
                                            for channel in image.pixels.channels], None)
         self.pxsize_um = None if self.pxsize is None else self.pxsize.to(self.ureg.um).m
         self.exposuretime_s = [None if i is None else i.to(self.ureg.s).m for i in self.exposuretime]
-        self.file_shape = self.shape.xyczt
 
         if axes is None:
             self.axes = ''.join(i for i in 'cztxy' if self.shape[i] > 1)
@@ -622,694 +1405,6 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, metaclass=ABCMeta):
             self.immersionN = 1.33
         else:
             self.immersionN = 1
-
-    @cached_property
-    def timeseries(self):
-        return self.shape['t'] > 1
-
-    @cached_property
-    def zstack(self):
-        return self.shape['z'] > 1
-
-    def set_transform(self):
-        # handle transforms
-        if self.transform is False or self.transform is None:
-            self.transform = None
-        else:
-            if isinstance(self.transform, Transforms):
-                self.transform = self.transform
-            else:
-                if isinstance(self.transform, str):
-                    self.transform = ImTransforms(self.path, self.cyllens, self.transform)
-                else:
-                    self.transform = ImTransforms(self.path, self.cyllens, self.beadfile)
-                if self.drift is True:
-                    self.transform = ImShiftTransforms(self)
-                elif not (self.drift is False or self.drift is None):
-                    self.transform = ImShiftTransforms(self, self.drift)
-            self.transform.adapt(self.frameoffset, self.shape.xyczt)
-            self.beadfile = self.transform.files
-
-    def __framet__(self, c, z, t):
-        return self.transform_frame(self.__frame__(c, z, t), c, t)
-
-    def new(self, **kwargs):
-        # TODO: fix this function
-        c, a = self.__reduce__()
-        new_kwargs = {key: value for key, value in zip(inspect.getfullargspec(c).args[1:], a)}
-        for key, value in kwargs.items():
-            new_kwargs[key] = value
-        return c(**new_kwargs)
-
-    @staticmethod
-    def get_config(file):
-        """ Open a yml config file """
-        loader = yaml.SafeLoader
-        loader.add_implicit_resolver(
-            r'tag:yaml.org,2002:float',
-            re.compile(r'''^(?:
-             [-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+]?[0-9]+)?
-            |[-+]?(?:[0-9][0-9_]*)(?:[eE][-+]?[0-9]+)
-            |\.[0-9_]+(?:[eE][-+][0-9]+)?
-            |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*
-            |[-+]?\\.(?:inf|Inf|INF)
-            |\.(?:nan|NaN|NAN))$''', re.X),
-            list(r'-+0123456789.'))
-        with open(file, 'r') as f:
-            return yaml.load(f, loader)
-
-    @staticmethod
-    def kill_vm():
-        JVM().kill_vm()
-
-    @property
-    def frame_decorator(self):
-        return self._frame_decorator
-
-    @frame_decorator.setter
-    def frame_decorator(self, decorator):
-        self._frame_decorator = decorator
-        self.cache = DequeDict(self.cache.maxlen)
-
-    @property
-    def summary(self):
-        """ gives a helpful summary of the recorded experiment """
-        s = [f"path/filename: {self.path}",
-             f"series/pos:    {self.series}",
-             f"reader:        {self.__class__.__module__.split('.')[-1]}",
-             f"dtype:         {self.dtype}",
-             f"shape ({self.axes}):".ljust(15) + f"{' x '.join(str(i) for i in self.shape)}"]
-        if self.pxsize_um:
-            s.append(f'pixel size:    {1000 * self.pxsize_um:.2f} nm')
-        if self.zstack and self.deltaz_um:
-            s.append(f'z-interval:    {1000 * self.deltaz_um:.2f} nm')
-        if self.exposuretime_s and not all(e is None for e in self.exposuretime_s):
-            s.append(f'exposuretime:  {self.exposuretime_s[0]:.2f} s')
-        if self.timeseries and self.timeinterval:
-            s.append(f'time interval: {self.timeinterval:.3f} s')
-        if self.binning:
-            s.append('binning:       {}x{}'.format(*self.binning))
-        if self.laserwavelengths:
-            s.append('laser colors:  ' + ' | '.join([' & '.join(len(w) * ('{:.0f}',)).format(*w)
-                                                     for w in self.laserwavelengths]) + ' nm')
-        if self.laserpowers:
-            s.append('laser powers:  ' + ' | '.join([' & '.join(len(p) * ('{:.3g}',)).format(*[100 * i for i in p])
-                                                     for p in self.laserpowers]) + ' %')
-        if self.objective:
-            s.append('objective:     {}'.format(self.objective.model))
-        if self.magnification:
-            s.append('magnification: {}x'.format(self.magnification))
-        if self.tubelens:
-            s.append('tubelens:      {}'.format(self.tubelens.model))
-        if self.filter:
-            s.append('filterset:     {}'.format(self.filter))
-        if self.powermode:
-            s.append('powermode:     {}'.format(self.powermode))
-        if self.collimator:
-            s.append('collimator:   ' + (' {}' * len(self.collimator)).format(*self.collimator))
-        if self.tirfangle:
-            s.append('TIRF angle:   ' + (' {:.2f}°' * len(self.tirfangle)).format(*self.tirfangle))
-        if self.gain:
-            s.append('gain:         ' + (' {:.0f}' * len(self.gain)).format(*self.gain))
-        if self.pcf:
-            s.append('pcf:          ' + (' {:.2f}' * len(self.pcf)).format(*self.pcf))
-        return '\n'.join(s)
-
-    def __str__(self):
-        return str(self.path)
-
-    def __len__(self):
-        return self.shape[0]
-
-    def __call__(self, c=None, z=None, t=None, x=None, y=None):
-        """ same as im[] but allowing keyword axes, but slices need to made with slice() or np.s_ """
-        return self[{k: slice(v) if v is None else v for k, v in dict(c=c, z=z, t=t, x=x, y=y).items()}]
-
-    def __getitem__(self, n):
-        """ slice like a numpy array but return an Imread instance """
-        if self.isclosed:
-            raise IOError("file is closed")
-        if isinstance(n, (slice, Number)):  # None = :
-            n = (n,)
-        elif isinstance(n, type(Ellipsis)):
-            n = (None,) * len(self.axes)
-        elif isinstance(n, dict):  # allow im[dict(z=0)] etc.
-            n = [n.get(i, slice(None)) for i in self.axes]
-        n = list(n)
-
-        # deal with ...
-        ell = [i for i, e in enumerate(n) if isinstance(e, type(Ellipsis))]
-        if len(ell) > 1:
-            raise IndexError('an index can only have a single ellipsis (...)')
-        if len(ell):
-            if len(n) > self.ndim:
-                n.remove(Ellipsis)
-            else:
-                n[ell[0]] = None
-                while len(n) < self.ndim:
-                    n.insert(ell[0], None)
-        while len(n) < self.ndim:
-            n.append(None)
-
-        axes_idx = [self.shape.axes.find(i) for i in 'xyczt']
-        n = [n[j] if 0 <= j < len(n) else None for j in axes_idx]  # reorder n
-
-        new_slice = []
-        for s, e in zip(self.slice, n):
-            if e is None:
-                new_slice.append(s)
-            else:
-                new_slice.append(s[e])
-
-        # TODO: check output dimensionality when requested shape in some dimension is 1
-        if all([isinstance(s, Number) or s.size == 1 for s in new_slice]):
-            return self.block(*new_slice).item()
-        else:
-            new = self.copy()
-            new.slice = new_slice
-            new._shape = Shape([1 if isinstance(s, Number) else len(s) for s in new_slice])
-            new.axes = ''.join(j for j in self.axes if j in [i for i, s in zip('xyczt', new_slice)
-                                                             if not isinstance(s, Number)])
-            return new
-
-    def __contains__(self, item):
-        def unique_yield(a, b):
-            for k in a:
-                yield k
-            for k in b:
-                if k not in a:
-                    yield k
-
-        for idx in unique_yield(list(self.cache.keys()),
-                                product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t']))):
-            xyczt = (slice(None), slice(None)) + idx
-            in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
-            if item in np.asarray(self[in_idx]):
-                return True
-        return False
-
-    def __array__(self, dtype=None):
-        block = self.block(*self.slice)
-        axes_idx = [self.shape.axes.find(i) for i in 'xyczt']
-        axes_squeeze = tuple({i for i, j in enumerate(axes_idx) if j == -1}.union(
-            {i for i, j in enumerate(self.slice) if isinstance(j, Number)}))
-        block = block.squeeze(axes_squeeze)
-        if dtype is not None:
-            block = block.astype(dtype)
-        if block.ndim == 0:
-            return block.item()
-        axes = ''.join(j for i, j in enumerate('xyczt') if i not in axes_squeeze)
-        return block.transpose([axes.find(i) for i in self.shape.axes if i in axes])
-
-    def asarray(self):
-        return self.__array__()
-
-    def astype(self, dtype):
-        new = self.copy()
-        new.dtype = dtype
-        return new
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args, **kwargs):
-        exception = None
-        self.base = None
-        for copy in self.copies:
-            try:
-                copy.__exit__()
-            except Exception as e:
-                exception = e
-        self.copies = []
-        if hasattr(self, 'close') and not self.isclosed:
-            self.close()
-        self.isclosed = True
-        if exception:
-            raise exception
-
-    def __getstate__(self):
-        return {key: value for key, value in self.__dict__.items() if key not in self.do_not_pickle}
-
-    def __setstate__(self, state):
-        """ What happens during unpickling """
-        self.__dict__.update(state)
-        self.open()
-        self.copies = []
-        self.cache = DequeDict(16)
-
-    # TODO: this is causing problems when multiprocessing and doesn't work anyway
-    # def __del__(self):
-    #     if not self.copies:
-    #         if self.base is None:
-    #             self.__exit__()
-    #         else:
-    #             self.base.copies.remove(self)
-
-    def __copy__(self):
-        return self.copy()
-
-    def copy(self):
-        new = Imread.__new__(self.__class__)
-        new.copies = []
-        new.base = self
-        for key, value in self.__dict__.items():
-            if key in self.do_copy or (key not in self.do_not_copy and not hasattr(new, key)):
-                new.__dict__[key] = value
-        self.copies.append(new)
-        return new
-
-    @property
-    def shape(self):
-        return self._shape
-
-    @shape.setter
-    def shape(self, value):
-        self._shape = Shape((value['xyczt'.find(i.lower())] for i in self.axes), self.axes)
-
-    @property
-    def axes(self):
-        return self.shape.axes
-
-    @axes.setter
-    def axes(self, value):
-        shape = self.shape[value]
-        if isinstance(shape, Number):
-            shape = (shape,)
-        self._shape = Shape(shape, value)
-
-    @property
-    def ndim(self):
-        return len(self.shape)
-
-    def squeeze(self, axes=None):
-        new = self.copy()
-        if axes is None:
-            axes = tuple(i for i, j in enumerate(new.shape) if j == 1)
-        elif isinstance(axes, Number):
-            axes = (axes,)
-        else:
-            axes = tuple(new.axes.find(ax) if isinstance(ax, str) else ax for ax in axes)
-        if any([new.shape[ax] != 1 for ax in axes]):
-            raise ValueError('cannot select an axis to squeeze out which has size not equal to one')
-        new.axes = ''.join(j for i, j in enumerate(new.axes) if i not in axes)
-        return new
-
-    def transpose(self, axes=None):
-        new = self.copy()
-        if axes is None:
-            new.axes = new.axes[::-1]
-        else:
-            new.axes = ''.join(ax if isinstance(ax, str) else new.axes[ax] for ax in axes)
-        return new
-
-    @property
-    def T(self):
-        return self.transpose()
-
-    def swapaxes(self, axis1, axis2):
-        new = self.copy()
-        axes = new.axes
-        if isinstance(axis1, str):
-            axis1 = axes.find(axis1)
-        if isinstance(axis2, str):
-            axis2 = axes.find(axis2)
-        axes[axis1], axes[axis2] = axes[axis2], axes[axis1]
-        new.axes = axes
-        return new
-
-    def moveaxis(self, source, destination):
-        raise NotImplementedError('moveaxis it not implemented')
-
-    def transform_frame(self, frame, c, t=0):
-        if self.transform is None:
-            return frame
-        else:
-            return self.transform[(self.cnamelist[c],)].frame(frame)
-
-    def get_czt(self, c, z, t):
-        czt = []
-        for i, n in zip('czt', (c, z, t)):
-            if n is None:
-                czt.append(list(range(self.shape[i])))
-            elif isinstance(n, range):
-                if n.stop < 0:
-                    stop = n.stop % self.shape[i]
-                elif n.stop > self.shape[i]:
-                    stop = self.shape[i]
-                else:
-                    stop = n.stop
-                czt.append(list(range(n.start % self.shape[i], stop, n.step)))
-            elif isinstance(n, Number):
-                czt.append([n % self.shape[i]])
-            else:
-                czt.append([k % self.shape[i] for k in n])
-        return [self.get_channel(c) for c in czt[0]], *czt[1:]
-
-    @staticmethod
-    def __array_arg_fun__(self, fun, axis=None, out=None):
-        """ frame-wise application of np.argmin and np.argmax """
-        if axis is None:
-            value = arg = None
-            for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                xyczt = (slice(None), slice(None)) + idx
-                in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
-                new = np.asarray(self[in_idx])
-                new_arg = np.unravel_index(fun(new), new.shape)
-                new_value = new[new_arg]
-                if value is None:
-                    arg = new_arg + idx
-                    value = new_value
-                else:
-                    i = fun((value, new_value))
-                    arg = (arg, new_arg + idx)[i]
-                    value = (value, new_value)[i]
-            axes = ''.join(i for i in self.axes if i in 'xy') + 'czt'
-            arg = np.ravel_multi_index([arg[axes.find(i)] for i in self.axes], self.shape)
-            if out is None:
-                return arg
-            else:
-                out.itemset(arg)
-                return out
-        else:
-            if isinstance(axis, str):
-                axis_str, axis_idx = axis, self.axes.index(axis)
-            else:
-                axis_str, axis_idx = self.axes[axis], axis
-            if axis_str not in self.axes:
-                raise IndexError(f'Axis {axis_str} not in {self.axes}.')
-            out_shape = list(self.shape)
-            out_axes = list(self.axes)
-            out_shape.pop(axis_idx)
-            out_axes.pop(axis_idx)
-            if out is None:
-                out = np.zeros(out_shape, int)
-            if axis_str in 'xy':
-                for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                    xyczt = (slice(None), slice(None)) + idx
-                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
-                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
-                    new = self[in_idx]
-                    out[out_idx] = fun(np.asarray(new), new.axes.find(axis_str))
-            else:
-                value = np.zeros(out.shape, self.dtype)
-                for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                    xyczt = (slice(None), slice(None)) + idx
-                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
-                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
-                    new_value = self[in_idx]
-                    new_arg = np.full_like(new_value, idx['czt'.find(axis_str)])
-                    if idx['czt'.find(axis_str)] == 0:
-                        value[out_idx] = new_value
-                        out[out_idx] = new_arg
-                    else:
-                        old_value = value[out_idx]
-                        i = fun((old_value, new_value), 0)
-                        value[out_idx] = np.where(i, new_value, old_value)
-                        out[out_idx] = np.where(i, new_arg, out[out_idx])
-            return out
-
-    def argmin(self, *args, **kwargs):
-        return Imread.__array_arg_fun__(self, np.argmin, *args, **kwargs)
-
-    def argmax(self, *args, **kwargs):
-        return Imread.__array_arg_fun__(self, np.argmax, *args, **kwargs)
-
-    def __array_fun__(self, fun, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True, ffun=None):
-        """ frame-wise application of np.min, np.max, np.sum, np.mean and their nan equivalents """
-        if ffun is None:
-            def ffun(im):
-                return im
-        if dtype is None:
-            dtype = self.dtype if out is None else out.dtype
-
-        # TODO: smarter transforms
-        if where is not True:
-            raise NotImplementedError('Argument where != True is not implemented.')
-        if axis is None:
-            for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                xyczt = (slice(None), slice(None)) + idx
-                in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
-                initial = fun(np.asarray(ffun(self[in_idx])), initial=initial)
-            if out is None:
-                return np.array(initial, dtype, ndmin=self.ndim) if keepdims else initial
-            else:
-                out.itemset(initial)
-                return out
-        else:
-            if isinstance(axis, str):
-                axis_str, axis_idx = axis, self.axes.index(axis)
-            else:
-                axis_idx = axis % self.ndim
-                axis_str = self.axes[axis_idx]
-            if axis_str not in self.axes:
-                raise IndexError(f'Axis {axis_str} not in {self.axes}.')
-            out_shape = list(self.shape)
-            out_axes = list(self.axes)
-            if not keepdims:
-                out_shape.pop(axis_idx)
-                out_axes.pop(axis_idx)
-            if out is None:
-                out = np.zeros(out_shape, dtype)
-            if axis_str in 'xy':
-                for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                    xyczt = (slice(None), slice(None)) + idx
-                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
-                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
-                    new = ffun(self[in_idx])
-                    out[out_idx] = fun(np.asarray(new), new.axes.find(axis_str), initial=initial)
-            else:
-                for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                    xyczt = (slice(None), slice(None)) + idx
-                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
-                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
-                    if idx['czt'.find(axis_str)] == 0:
-                        out[out_idx] = fun((ffun(self[in_idx]),), 0, initial=initial)
-                    else:
-                        out[out_idx] = fun((out[out_idx], self[in_idx]), 0)
-            return out
-
-    def sum(self, axis=None, dtype=None, out=None, keepdims=False, initial=0, where=True, ffun=None, **kwargs):
-        return Imread.__array_fun__(self, np.sum, axis, out=out, dtype=dtype, keepdims=keepdims, initial=initial,
-                                    where=where, ffun=ffun)
-
-    def nansum(self, axis=None, dtype=None, out=None, keepdims=False, initial=0, where=True, ffun=None, **kwargs):
-        return Imread.__array_fun__(self, np.nansum, axis, out=out, dtype=dtype, keepdims=keepdims, initial=initial,
-                                    where=where, ffun=ffun)
-
-    def min(self, axis=None, out=None, keepdims=False, initial=0, where=True, ffun=None, **kwargs):
-        return Imread.__array_fun__(self, np.min, axis, out=out, keepdims=keepdims, initial=initial,
-                                    where=where, ffun=ffun)
-
-    def nanmin(self, axis=None, out=None, keepdims=False, initial=0, where=True, ffun=None, **kwargs):
-        return Imread.__array_fun__(self, np.nanmin, axis, out=out, keepdims=keepdims, initial=initial,
-                                    where=where, ffun=ffun)
-
-    def max(self, axis=None, out=None, keepdims=False, initial=0, where=True, ffun=None, **kwargs):
-        return Imread.__array_fun__(self, np.max, axis, out=out, keepdims=keepdims, initial=initial,
-                                    where=where, ffun=ffun)
-
-    def nanmax(self, axis=None, out=None, keepdims=False, initial=0, where=True, ffun=None, **kwargs):
-        return Imread.__array_fun__(self, np.nanmax, axis, out=out, keepdims=keepdims, initial=initial,
-                                    where=where, ffun=ffun)
-
-    def mean(self, axis=None, dtype=None, out=None, keepdims=False, *, where=True, **kwargs):
-        res = self.sum(axis, out=out, keepdims=keepdims, where=where)
-        shape = np.prod(self.shape) if axis is None else self.shape[axis]
-        if out is None:
-            res = res / shape
-            if dtype is not None:
-                res = res.astype(dtype)
-            return res
-        else:
-            if out.dtype.kind in 'ui':
-                res //= shape
-            else:
-                res /= shape
-            return res.astype(out.dtype, copy=False)
-
-    def nanmean(self, axis=None, dtype=None, out=None, keepdims=False, *, where=True, **kwargs):
-        res = self.nansum(axis, out=out, keepdims=keepdims, where=where)
-        if out is None:
-            res = res / self.sum(axis, None, keepdims=keepdims, where=where, ffun=lambda x: np.invert(np.isnan(x)))
-            if dtype is None:
-                res = res.astype(dtype)
-            return res
-        else:
-            if out.dtype.kind in 'ui':
-                res //= self.sum(axis, None, keepdims=keepdims, where=where, ffun=lambda x: np.invert(np.isnan(x)))
-            else:
-                res /= self.sum(axis, None, keepdims=keepdims, where=where, ffun=lambda x: np.invert(np.isnan(x)))
-            return res.astype(out.dtype, copy=False)
-
-    def reshape(self, *args, **kwargs):
-        return np.asarray(self).reshape(*args, **kwargs)
-
-    def is_noise(self, volume=None):
-        """ True if volume only has noise """
-        if volume is None:
-            volume = self
-        fft = np.fft.fftn(volume)
-        corr = np.fft.fftshift(np.fft.ifftn(fft * fft.conj()).real / np.sum(volume ** 2))
-        return -np.log(1 - corr[tuple([0] * corr.ndim)]) > 5
-
-    @property
-    def dtype(self):
-        return self._dtype
-
-    @dtype.setter
-    def dtype(self, value):
-        self._dtype = np.dtype(value)
-
-    def get_channel(self, channel_name):
-        if not isinstance(channel_name, str):
-            return channel_name
-        else:
-            c = [i for i, c in enumerate(self.cnamelist) if c.lower().startswith(channel_name.lower())]
-            assert len(c) > 0, 'Channel {} not found in {}'.format(c, self.cnamelist)
-            assert len(c) < 2, 'Channel {} not unique in {}'.format(c, self.cnamelist)
-            return c[0]
-
-    def frame(self, c=0, z=0, t=0):
-        """ returns single 2D frame """
-        c = self.get_channel(c)
-        c %= self.file_shape[2]
-        z %= self.file_shape[3]
-        t %= self.file_shape[4]
-
-        # cache last n (default 16) frames in memory for speed (~250x faster)
-        if (c, z, t) in self.cache:
-            self.cache.move_to_end((c, z, t))
-            f = self.cache[(c, z, t)]
-        else:
-            f = self.__framet__(c, z, t)
-            if self.frame_decorator is not None:
-                f = self.frame_decorator(self, f, c, z, t)
-            self.cache[(c, z, t)] = f
-        if self.dtype is not None:
-            return f.copy().astype(self.dtype)
-        else:
-            return f.copy()
-
-    def data(self, c=0, z=0, t=0):
-        """ returns 3D stack of frames """
-        c, z, t = [np.arange(self.shape[i]) if e is None else np.array(e, ndmin=1) for i, e in zip('czt', (c, z, t))]
-        return np.dstack([self.frame(ci, zi, ti) for ci, zi, ti in product(c, z, t)])
-
-    def block(self, x=None, y=None, c=None, z=None, t=None):
-        """ returns 5D block of frames """
-        x, y, c, z, t = [np.arange(self.shape[i]) if e is None else np.array(e, ndmin=1)
-                         for i, e in zip('xyczt', (x, y, c, z, t))]
-        d = np.full((len(x), len(y), len(c), len(z), len(t)), np.nan, self.dtype)
-        for (ci, cj), (zi, zj), (ti, tj) in product(enumerate(c), enumerate(z), enumerate(t)):
-            d[:, :, ci, zi, ti] = self.frame(cj, zj, tj)[x][:, y]
-        return d
-
-    @cached_property
-    def piezoval(self):
-        """ gives the height of the piezo and focus motor, only available when CylLensGUI was used """
-
-        def upack(idx):
-            time = list()
-            val = list()
-            if len(idx) == 0:
-                return time, val
-            for i in idx:
-                time.append(int(re.search(r'\d+', n[i]).group(0)))
-                val.append(w[i])
-            return zip(*sorted(zip(time, val)))
-
-        # Maybe the values are stored in the metadata
-        n = self.metadata.search('LsmTag|Name')[0]
-        w = self.metadata.search('LsmTag')[0]
-        if n is not None:
-            # n = self.metadata['LsmTag|Name'][1:-1].split(', ')
-            # w = str2float(self.metadata['LsmTag'][1:-1].split(', '))
-
-            pidx = np.where([re.search(r'^Piezo\s\d+$', x) is not None for x in n])[0]
-            sidx = np.where([re.search(r'^Zstage\s\d+$', x) is not None for x in n])[0]
-
-            ptime, pval = upack(pidx)
-            stime, sval = upack(sidx)
-
-        # Or maybe in an extra '.pzl' file
-        else:
-            m = self.extrametadata
-            if m is not None and 'p' in m:
-                q = np.array(m['p'])
-                if not len(q.shape):
-                    q = np.zeros((1, 3))
-
-                ptime = [int(i) for i in q[:, 0]]
-                pval = [float(i) for i in q[:, 1]]
-                sval = [float(i) for i in q[:, 2]]
-
-            else:
-                ptime = []
-                pval = []
-                sval = []
-
-        df = pandas.DataFrame(columns=['frame', 'piezoZ', 'stageZ'])
-        df['frame'] = ptime
-        df['piezoZ'] = pval
-        df['stageZ'] = np.array(sval) - np.array(pval) - \
-                       self.metadata.re_search(r'AcquisitionModeSetup\|ReferenceZ', 0)[0] * 1e6
-
-        # remove duplicates
-        df = df[~df.duplicated('frame', 'last')]
-        return df
-
-    @cached_property
-    def extrametadata(self):
-        if isinstance(self.path, Path):
-            if self.path.with_suffix('.pzl2').exists():
-                pname = self.path.with_suffix('.pzl2')
-            elif self.path.with_suffix('.pzl').exists():
-                pname = self.path.with_suffix('.pzl')
-            else:
-                return
-            try:
-                return self.get_config(pname)
-            except (Exception,):
-                return
-        return
-
-    def save_as_tiff(self, fname=None, c=None, z=None, t=None, split=False, bar=True, pixel_type='uint16', **kwargs):
-        """ saves the image as a tiff-file
-            split: split channels into different files """
-        if fname is None:
-            fname = self.path.with_suffix('.tif')
-            if fname == self.path:
-                raise FileExistsError(f'File {fname} exists already.')
-        if not isinstance(fname, Path):
-            fname = Path(fname)
-        if split:
-            for i in range(self.shape['c']):
-                if self.timeseries:
-                    self.save_as_tiff(fname.with_name(f'{fname.stem}_C{i:01d}').with_suffix('.tif'), i, 0, None, False,
-                                      bar, pixel_type)
-                else:
-                    self.save_as_tiff(fname.with_name(f'{fname.stem}_C{i:01d}').with_suffix('.tif'), i, None, 0, False,
-                                      bar, pixel_type)
-        else:
-            n = [c, z, t]
-            for i, ax in enumerate('czt'):
-                if n[i] is None:
-                    n[i] = range(self.shape[ax])
-                elif not isinstance(n[i], (tuple, list)):
-                    n[i] = (n[i],)
-
-            shape = [len(i) for i in n]
-            at_least_one = False
-            with IJTiffFile(fname.with_suffix('.tif'), shape, pixel_type,
-                            pxsize=self.pxsize_um, deltaz=self.deltaz_um, **kwargs) as tif:
-                for i, m in tqdm(zip(product(*[range(s) for s in shape]), product(*n)),
-                                 total=np.prod(shape), desc='Saving tiff', disable=not bar):
-                    if np.any(self(*m)) or not at_least_one:
-                        tif.save(self(*m), *i)
-                        at_least_one = True
-
-    def __repr__(self):
-        return self.summary
 
 
 def main():

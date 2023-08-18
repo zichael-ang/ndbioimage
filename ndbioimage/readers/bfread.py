@@ -3,7 +3,7 @@ import numpy as np
 from abc import ABC
 from multiprocessing import queues
 from traceback import print_exc
-from .. import Imread, JVM
+from .. import AbstractReader, JVM
 
 
 jars = {'bioformats_package.jar':
@@ -174,7 +174,7 @@ def can_open(path):
         jvm.kill_vm()
 
 
-class Reader(Imread, ABC):
+class Reader(AbstractReader, ABC):
     """ This class is used as a last resort, when we don't have another way to open the file. We don't like it
         because it requires the java vm.
     """

@@ -2,11 +2,11 @@ import numpy as np
 from ome_types import model
 from functools import cached_property
 from abc import ABC
-from .. import Imread
+from .. import AbstractReader
 from itertools import product
 
 
-class Reader(Imread, ABC):
+class Reader(AbstractReader, ABC):
     priority = 20
 
     @staticmethod

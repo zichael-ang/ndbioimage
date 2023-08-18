@@ -6,10 +6,10 @@ from functools import cached_property
 from ome_types import model
 from pathlib import Path
 from itertools import product
-from .. import Imread
+from .. import AbstractReader
 
 
-class Reader(Imread, ABC):
+class Reader(AbstractReader, ABC):
     priority = 0
     do_not_pickle = 'reader'
 
@@ -67,6 +67,6 @@ class Reader(Imread, ABC):
 
     def __frame__(self, c, z, t):
         if self.p_ndim == 3:
-            return np.transpose(self.reader.asarray(z + t * self.file_shape[3]), self.p_transpose)[c]
+            return np.transpose(self.reader.asarray(z + t * self.base.shape['z']), self.p_transpose)[c]
         else:
-            return self.reader.asarray(c + z * self.file_shape[2] + t * self.file_shape[2] * self.file_shape[3])
+            return self.reader.asarray(c + z * self.base.shape['c'] + t * self.base.shape['c'] * self.base.shape['z'])

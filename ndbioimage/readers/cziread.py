@@ -7,10 +7,10 @@ from abc import ABC
 from functools import cached_property
 from itertools import product
 from pathlib import Path
-from .. import Imread
+from .. import AbstractReader
 
 
-class Reader(Imread, ABC):
+class Reader(AbstractReader, ABC):
     priority = 0
     do_not_pickle = 'reader', 'filedict'
 
@@ -69,7 +69,7 @@ class Reader(Imread, ABC):
 
         instrument = information.find("Instrument")
         for _ in instrument.find("Microscopes"):
-            ome.instruments.append(model.Instrument())
+            ome.instruments.append(model.Instrument(id='Instrument:0'))
 
         for detector in instrument.find("Detectors"):
             try:
@@ -414,7 +414,7 @@ class Reader(Imread, ABC):
         return ome
 
     def __frame__(self, c=0, z=0, t=0):
-        f = np.zeros(self.file_shape[:2], self.dtype)
+        f = np.zeros(self.base.shape['xy'], self.dtype)
         directory_entries = self.filedict[c, z, t]
         x_min = min([f.start[f.axes.index('X')] for f in directory_entries])
         y_min = min([f.start[f.axes.index('Y')] for f in directory_entries])

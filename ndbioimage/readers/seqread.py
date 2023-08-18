@@ -8,7 +8,7 @@ from ome_types._base_type import quantity_property
 from itertools import product
 from datetime import datetime
 from abc import ABC
-from .. import Imread
+from .. import AbstractReader
 
 
 def lazy_property(function, field, *arg_fields):
@@ -36,7 +36,7 @@ class Plane(model.Plane):
         return float((datetime.strptime(info["Time"], "%Y-%m-%d %H:%M:%S %z") - t0).seconds)
 
 
-class Reader(Imread, ABC):
+class Reader(AbstractReader, ABC):
     priority = 10
 
     @staticmethod
