@@ -107,7 +107,7 @@ class Reader(AbstractReader, ABC):
         return ome
 
     def open(self):
-        if re.match(r'(?:\d+\-)?Pos.*', self.path.name) is None:
+        if re.match(r'(?:\d+-)?Pos.*', self.path.name) is None:
             path = self.path / f"Pos{self.series}"
         else:
             path = self.path

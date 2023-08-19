@@ -367,13 +367,12 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
         raise ReaderNotFoundError(f'No reader found for {path}.')
 
     def __init__(self, base=None, slice=None, shape=(0, 0, 0, 0, 0), dtype=None,
-                 transform=False, drift=False, beadfile=None):
+                 transform=False, drift=False, beadfile=None, frame_decorator=None):
         self.base = base
         self.slice = slice
         self._shape = Shape(shape)
         self.dtype = dtype
-        self.views = []
-        self._frame_decorator = None
+        self.frame_decorator = frame_decorator
 
         self.transform = transform
         self.drift = drift
@@ -397,7 +396,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
                 if k not in a:
                     yield k
 
-        for idx in unique_yield(list(self.cache.keys()),
+        for idx in unique_yield([key[:3] for key in self.cache.keys()],
                                 product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t']))):
             xyczt = (slice(None), slice(None)) + idx
             in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
@@ -409,18 +408,10 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
         return self
 
     def __exit__(self, *args, **kwargs):
-        exception = None
-        for view in self.views:
-            try:
-                view.__exit__()
-            except Exception as e:
-                exception = e
-        self.views = []
-        if hasattr(self, 'close') and not self.isclosed:
-            self.close()
-        self.isclosed = True
-        if exception:
-            raise exception
+        if not self.isclosed:
+            self.isclosed = True
+            if hasattr(self, 'close'):
+                self.close()
 
     def __getitem__(self, n):
         """ slice like a numpy array but return an Imread instance """
@@ -483,21 +474,10 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
         self.__dict__.update(state)
         if isinstance(self, AbstractReader):
             self.open()
-        self.views = []
         self.cache = DequeDict(16)
 
     def __str__(self):
         return str(self.path)
-
-
-
-    # TODO: this is causing problems when multiprocessing and doesn't work anyway
-    # def __del__(self):
-    #     if not self.copies:
-    #         if self.base is None:
-    #             self.__exit__()
-    #         else:
-    #             self.base.views.remove(self)
 
     def __array__(self, dtype=None):
         block = self.block(*self.slice)
@@ -690,15 +670,6 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
             except (Exception,):
                 return
         return
-
-    @property
-    def frame_decorator(self):
-        return self._frame_decorator
-
-    @frame_decorator.setter
-    def frame_decorator(self, decorator):
-        self._frame_decorator = decorator
-        self.cache = DequeDict(self.cache.maxlen)
 
     @property
     def ndim(self):
@@ -940,6 +911,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
     @wraps(np.sum)
     def sum(self, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
         return self.__array_fun__([np.sum], axis, dtype, out, keepdims, [initial], where)
+
     @wraps(np.swapaxes)
     def swapaxes(self, axis1, axis2):
         new = self.copy()
@@ -992,7 +964,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
         """ returns 5D block of frames """
         x, y, c, z, t = [np.arange(self.shape[i]) if e is None else np.array(e, ndmin=1)
                          for i, e in zip('xyczt', (x, y, c, z, t))]
-        d = np.full((len(x), len(y), len(c), len(z), len(t)), np.nan, self.dtype)
+        d = np.empty((len(x), len(y), len(c), len(z), len(t)), self.dtype)
         for (ci, cj), (zi, zj), (ti, tj) in product(enumerate(c), enumerate(z), enumerate(t)):
             d[:, :, ci, zi, ti] = self.frame(cj, zj, tj)[x][:, y]
         return d
@@ -1013,7 +985,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
         t %= self.base.shape['t']
 
         # cache last n (default 16) frames in memory for speed (~250x faster)
-        key = (c, z, t, self.transform is None, self.frame_decorator is None)
+        key = (c, z, t, self.transform, self.frame_decorator)
         if key in self.cache:
             self.cache.move_to_end(key)
             f = self.cache[key]
@@ -1170,15 +1142,13 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
 class View(Imread):
     def __init__(self, base, dtype=None, transform=None, drift=None, beadfile=None):
         super().__init__(base.base, base.slice, base.shape, dtype or base.dtype, transform or base.transform,
-                         drift or base.drift, beadfile or base.beadfile)
-        base.views.append(self)
+                         drift or base.drift, beadfile or base.beadfile, base.frame_decorator)
         self.set_transform()
 
     def __getattr__(self, item):
         if not hasattr(self.base, item):
             raise AttributeError(f'{self.__class__} object has no attribute {item}')
         return self.base.__getattribute__(item)
-
 
 
 class AbstractReader(Imread, metaclass=ABCMeta):

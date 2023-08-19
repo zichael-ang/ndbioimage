@@ -8,3 +8,4 @@
 /ndbioimage/_version.py
 /ndbioimage/jars
 /tests/files/*
+/poetry.lock
