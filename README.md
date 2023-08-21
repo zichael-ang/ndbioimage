@@ -2,10 +2,10 @@
 
 # ndbioimage - Work in progress
 
-Exposes (bio) images as a numpy ndarray-like-object, but without loading the whole
+Exposes (bio) images as a numpy ndarray-like object, but without loading the whole
 image into memory, reading from the file only when needed. Some metadata is read
 and stored in an ome structure. Additionally, it can automatically calculate an affine
-transform that corrects for chromatic abberrations etc. and apply it on the fly to the image.
+transform that corrects for chromatic aberrations etc. and apply it on the fly to the image.
 
 Currently, supports imagej tif files, czi files, micromanager tif sequences and anything
 bioformats can handle. 

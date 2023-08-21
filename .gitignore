@@ -9,3 +9,4 @@
 /ndbioimage/jars
 /tests/files/*
 /poetry.lock
+/dist/

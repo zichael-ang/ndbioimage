@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ndbioimage"
-version = "2023.8.1"
+version = "2023.8.2"
 description = "Bio image reading, metadata and some affine registration."
 authors = ["W. Pomp <w.pomp@nki.nl>"]
 license = "GPLv3"
@@ -17,7 +17,7 @@ pandas = "*"
 tifffile = "*"
 czifile = "*"
 tiffwrite = "*"
-ome-types = "^0.4"
+ome-types = "^0.4.0"
 pint = "*"
 tqdm = "*"
 lxml = "*"

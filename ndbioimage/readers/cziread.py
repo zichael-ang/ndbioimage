@@ -101,7 +101,7 @@ class Reader(AbstractReader, ABC):
 
         for light_source in instrument.find("LightSources"):
             if light_source.find("LightSourceType").find("Laser") is not None:
-                ome.instruments[0].light_source_group.append(
+                ome.instruments[0].lasers.append(
                     model.Laser(
                         id=f'LightSource:{light_source.attrib["Id"]}',
                         power=float(text(light_source.find("Power"))),
@@ -214,7 +214,7 @@ class Reader(AbstractReader, ABC):
                         x=float(text(geometry.find("Left"))),
                         y=float(text(geometry.find("Top")))))
                 ome.rois.append(roi)
-                ome.images[0].roi_ref.append(model.ROIRef(id=f"ROI:{idx}"))
+                ome.images[0].roi_refs.append(model.ROIRef(id=f"ROI:{idx}"))
                 idx += 1
         return ome
 
@@ -262,7 +262,7 @@ class Reader(AbstractReader, ABC):
 
         for light_source in instrument.find("LightSources"):
             if light_source.find("LightSourceType").find("Laser") is not None:
-                ome.instruments[0].light_source_group.append(
+                ome.instruments[0].lasers.append(
                     model.Laser(
                         id=light_source.attrib["Id"],
                         model=text(light_source.find("Manufacturer").find("Model")),
@@ -409,7 +409,7 @@ class Reader(AbstractReader, ABC):
                         x=float(text(geometry.find("Left"))),
                         y=float(text(geometry.find("Top")))))
                 ome.rois.append(roi)
-                ome.images[0].roi_ref.append(model.ROIRef(id=f"ROI:{idx}"))
+                ome.images[0].roi_refs.append(model.ROIRef(id=f"ROI:{idx}"))
                 idx += 1
         return ome
 
