@@ -18,29 +18,37 @@ try:
 
         def __init__(self, jars=None):
             if not self.vm_started and not self.vm_killed:
-                jarpath = Path(__file__).parent / 'jars'
-                if jars is None:
-                    jars = {}
-                for jar, src in jars.items():
-                    if not (jarpath / jar).exists():
-                        JVM.download(src, jarpath / jar)
-                classpath = [str(jarpath / jar) for jar in jars.keys()]
+                try:
+                    jarpath = Path(__file__).parent / 'jars'
+                    if jars is None:
+                        jars = {}
+                    for jar, src in jars.items():
+                        if not (jarpath / jar).exists():
+                            JVM.download(src, jarpath / jar)
+                    classpath = [str(jarpath / jar) for jar in jars.keys()]
 
-                import jpype
-                jpype.startJVM(classpath=classpath)
-                import jpype.imports
-                from loci.common import DebugTools
-                from loci.formats import ImageReader
-                from loci.formats import ChannelSeparator
-                from loci.formats import FormatTools
-                from loci.formats import MetadataTools
+                    import jpype
+                    jpype.startJVM(classpath=classpath)
+                except Exception:
+                    self.vm_started = False
+                else:
+                    self.vm_started = True
+                try:
+                    import jpype.imports
+                    from loci.common import DebugTools
+                    from loci.formats import ImageReader
+                    from loci.formats import ChannelSeparator
+                    from loci.formats import FormatTools
+                    from loci.formats import MetadataTools
 
-                DebugTools.setRootLevel("ERROR")
-                self.vm_started = True
-                self.image_reader = ImageReader
-                self.channel_separator = ChannelSeparator
-                self.format_tools = FormatTools
-                self.metadata_tools = MetadataTools
+                    DebugTools.setRootLevel("ERROR")
+
+                    self.image_reader = ImageReader
+                    self.channel_separator = ChannelSeparator
+                    self.format_tools = FormatTools
+                    self.metadata_tools = MetadataTools
+                except Exception:
+                    pass
 
             if self.vm_killed:
                 raise Exception('The JVM was killed before, and cannot be restarted in this Python process.')
@@ -51,8 +59,10 @@ try:
             dest.parent.mkdir(exist_ok=True)
             dest.write_bytes(request.urlopen(src).read())
 
-        def kill_vm(self):
-            if self.vm_started and not self.vm_killed:
+        @classmethod
+        def kill_vm(cls):
+            self = cls._instance
+            if self is not None and self.vm_started and not self.vm_killed:
                 import jpype
                 jpype.shutdownJVM()
             self.vm_started = False

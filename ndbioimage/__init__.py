@@ -346,7 +346,6 @@ class Shape(tuple):
 
 
 class Imread(np.lib.mixins.NDArrayOperatorsMixin):
-
     def __new__(cls, path=None, *args, **kwargs):
         if cls is not Imread:
             return super().__new__(cls)
@@ -955,7 +954,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
     def asarray(self):
         return self.__array__()
 
-    def astype(self, dtype):
+    def astype(self, dtype, *args, **kwargs):
         new = self.copy()
         new.dtype = dtype
         return new

@@ -58,6 +58,9 @@ class Reader(AbstractReader, ABC):
         def text(item, default=""):
             return default if item is None else item.text
 
+        def def_list(item):
+            return [] if item is None else item
+
         ome = model.OME()
 
         metadata = tree.find("Metadata")
@@ -99,7 +102,7 @@ class Reader(AbstractReader, ABC):
                     model=tubelens.attrib["Name"],
                     nominal_magnification=1.0))  # TODO: nominal_magnification
 
-        for light_source in instrument.find("LightSources"):
+        for light_source in def_list(instrument.find("LightSources")):
             if light_source.find("LightSourceType").find("Laser") is not None:
                 ome.instruments[0].lasers.append(
                     model.Laser(
@@ -222,6 +225,9 @@ class Reader(AbstractReader, ABC):
         def text(item, default=""):
             return default if item is None else item.text
 
+        def def_list(item):
+            return [] if item is None else item
+
         ome = model.OME()
 
         metadata = tree.find("Metadata")
@@ -260,7 +266,7 @@ class Reader(AbstractReader, ABC):
                     lens_na=float(text(objective.find("LensNA"))),
                     nominal_magnification=float(text(objective.find("NominalMagnification")))))
 
-        for light_source in instrument.find("LightSources"):
+        for light_source in def_list(instrument.find("LightSources")):
             if light_source.find("LightSourceType").find("Laser") is not None:
                 ome.instruments[0].lasers.append(
                     model.Laser(
@@ -415,18 +421,19 @@ class Reader(AbstractReader, ABC):
 
     def __frame__(self, c=0, z=0, t=0):
         f = np.zeros(self.base.shape['xy'], self.dtype)
-        directory_entries = self.filedict[c, z, t]
-        x_min = min([f.start[f.axes.index('X')] for f in directory_entries])
-        y_min = min([f.start[f.axes.index('Y')] for f in directory_entries])
-        xy_min = {'X': x_min, 'Y': y_min}
-        for directory_entry in directory_entries:
-            subblock = directory_entry.data_segment()
-            tile = subblock.data(resize=True, order=0)
-            axes_min = [xy_min.get(ax, 0) for ax in directory_entry.axes]
-            index = [slice(i - j - m, i - j + k)
-                     for i, j, k, m in zip(directory_entry.start, self.reader.start, tile.shape, axes_min)]
-            index = tuple(index[self.reader.axes.index(i)] for i in 'XY')
-            f[index] = tile.squeeze()
+        if (c, z, t) in self.filedict:
+            directory_entries = self.filedict[c, z, t]
+            x_min = min([f.start[f.axes.index('X')] for f in directory_entries])
+            y_min = min([f.start[f.axes.index('Y')] for f in directory_entries])
+            xy_min = {'X': x_min, 'Y': y_min}
+            for directory_entry in directory_entries:
+                subblock = directory_entry.data_segment()
+                tile = subblock.data(resize=True, order=0)
+                axes_min = [xy_min.get(ax, 0) for ax in directory_entry.axes]
+                index = [slice(i - j - m, i - j + k)
+                         for i, j, k, m in zip(directory_entry.start, self.reader.start, tile.shape, axes_min)]
+                index = tuple(index[self.reader.axes.index(i)] for i in 'XY')
+                f[index] = tile.squeeze()
         return f
 
     @staticmethod
