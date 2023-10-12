@@ -40,6 +40,7 @@ except (Exception,):
 
 ureg.default_format = '~P'
 set_application_registry(ureg)
+warnings.filterwarnings('ignore', 'Reference to unknown ID')
 
 
 class ReaderNotFoundError(Exception):
@@ -51,7 +52,7 @@ class ImTransforms(Transforms):
 
     def __init__(self, path, cyllens, file=None, transforms=None):
         super().__init__()
-        self.cyllens = cyllens
+        self.cyllens = tuple(cyllens)
         if transforms is None:
             # TODO: check this
             if re.search(r'^Pos\d+', path.name):
@@ -106,7 +107,7 @@ class ImTransforms(Transforms):
                 files = (Path(files),)
             elif isinstance(files, Path):
                 files = (files,)
-            return files
+            return tuple(files)
         except (Exception,):
             return ()
 
@@ -1375,6 +1376,13 @@ class AbstractReader(Imread, metaclass=ABCMeta):
         else:
             self.immersionN = 1
 
+        p = re.compile(r'(\d+):(\d+)$')
+        try:
+            self.track, self.detector = zip(*[[int(i) for i in p.findall(find(
+                self.ome.images[0].pixels.channels, id=f'Channel:{c}').detector_settings.id)[0]]
+                                              for c in range(self.shape['c'])])
+        except Exception:
+            pass
 
 def main():
     parser = ArgumentParser(description='Display info and save as tif')

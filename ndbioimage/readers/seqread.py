@@ -15,7 +15,7 @@ def lazy_property(function, field, *arg_fields):
     def lazy(self):
         if self.__dict__.get(field) is None:
             self.__dict__[field] = function(*[getattr(self, arg_field) for arg_field in arg_fields])
-            self.__fields_set__.add(field)
+            self.model_fields_set.add(field)
         return self.__dict__[field]
     return property(lazy)
 

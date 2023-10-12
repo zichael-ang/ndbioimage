@@ -182,7 +182,7 @@ class Reader(AbstractReader, ABC):
 
             ome.images[0].pixels.channels.append(
                 model.Channel(
-                    id=f"Channel:0:{idx}",
+                    id=f"Channel:{idx}",
                     name=channel.attrib["Name"],
                     acquisition_mode=text(channel.find("AcquisitionMode")),
                     color=model.Color(text(channels_ds[channel.attrib["Id"]].find("Color"))),
@@ -378,12 +378,12 @@ class Reader(AbstractReader, ABC):
 
             ome.images[0].pixels.channels.append(
                 model.Channel(
-                    id=f"Channel:0:{idx}",
+                    id=f"Channel:{idx}",
                     name=channel.attrib["Name"],
                     acquisition_mode=text(channel.find("AcquisitionMode")),
                     color=model.Color(text(channels_ds[channel.attrib["Id"]].find("Color"))),
                     detector_settings=model.DetectorSettings(id=detector.attrib["Id"], binning=binning),
-                    emission_wavelength=text(channel.find("EmissionWavelength")),
+                    # emission_wavelength=text(channel.find("EmissionWavelength")),  # TODO: fix
                     excitation_wavelength=light_source_settings.wavelength,
                     filter_set_ref=model.FilterSetRef(id=ome.instruments[0].filter_sets[filterset_idx].id),
                     illumination_type=text(channel.find("IlluminationType")),

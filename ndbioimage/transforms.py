@@ -66,6 +66,9 @@ class Transforms(dict):
     def __setstate__(self, state):
         self.__dict__.update(state)
 
+    def __hash__(self):
+        return hash(frozenset((*self.__dict__.items(), *self.items())))
+
     def save(self, file):
         with open(file.with_suffix(".yml"), 'w') as f:
             yaml.safe_dump(self.asdict(), f, default_flow_style=None)
