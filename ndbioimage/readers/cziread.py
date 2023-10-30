@@ -185,7 +185,7 @@ class Reader(AbstractReader, ABC):
                     id=f"Channel:{idx}",
                     name=channel.attrib["Name"],
                     acquisition_mode=text(channel.find("AcquisitionMode")),
-                    color=model.Color(text(channels_ds[channel.attrib["Id"]].find("Color"))),
+                    color=model.Color(text(channels_ds[channel.attrib["Id"]].find("Color"), 'white')),
                     detector_settings=model.DetectorSettings(
                         id=detector.attrib["Id"].replace(" ", ""),
                         binning=binning),
@@ -381,7 +381,7 @@ class Reader(AbstractReader, ABC):
                     id=f"Channel:{idx}",
                     name=channel.attrib["Name"],
                     acquisition_mode=text(channel.find("AcquisitionMode")),
-                    color=model.Color(text(channels_ds[channel.attrib["Id"]].find("Color"))),
+                    color=model.Color(text(channels_ds[channel.attrib["Id"]].find("Color"), 'white')),
                     detector_settings=model.DetectorSettings(id=detector.attrib["Id"], binning=binning),
                     # emission_wavelength=text(channel.find("EmissionWavelength")),  # TODO: fix
                     excitation_wavelength=light_source_settings.wavelength,

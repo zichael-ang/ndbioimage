@@ -47,6 +47,16 @@ class ReaderNotFoundError(Exception):
     pass
 
 
+class TransformTiff(IJTiffFile):
+    """ transform frames in a parallel process to speed up saving """
+    def __init__(self, image, *args, **kwargs):
+        self.image = image
+        super().__init__(*args, **kwargs)
+
+    def compress_frame(self, frame):
+        return super().compress_frame(np.asarray(self.image(*frame)).astype(self.dtype))
+
+
 class ImTransforms(Transforms):
     """ Transforms class with methods to calculate channel transforms from bead files etc. """
 
@@ -675,60 +685,6 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
     def ndim(self):
         return len(self.shape)
 
-    @cached_property
-    def piezoval(self):
-        """ gives the height of the piezo and focus motor, only available when CylLensGUI was used """
-
-        def upack(idx):
-            time = list()
-            val = list()
-            if len(idx) == 0:
-                return time, val
-            for i in idx:
-                time.append(int(re.search(r'\d+', n[i]).group(0)))
-                val.append(w[i])
-            return zip(*sorted(zip(time, val)))
-
-        # Maybe the values are stored in the metadata
-        n = self.metadata.search('LsmTag|Name')[0]
-        w = self.metadata.search('LsmTag')[0]
-        if n is not None:
-            # n = self.metadata['LsmTag|Name'][1:-1].split(', ')
-            # w = str2float(self.metadata['LsmTag'][1:-1].split(', '))
-
-            pidx = np.where([re.search(r'^Piezo\s\d+$', x) is not None for x in n])[0]
-            sidx = np.where([re.search(r'^Zstage\s\d+$', x) is not None for x in n])[0]
-
-            ptime, pval = upack(pidx)
-            stime, sval = upack(sidx)
-
-        # Or maybe in an extra '.pzl' file
-        else:
-            m = self.extrametadata
-            if m is not None and 'p' in m:
-                q = np.array(m['p'])
-                if not len(q.shape):
-                    q = np.zeros((1, 3))
-
-                ptime = [int(i) for i in q[:, 0]]
-                pval = [float(i) for i in q[:, 1]]
-                sval = [float(i) for i in q[:, 2]]
-
-            else:
-                ptime = []
-                pval = []
-                sval = []
-
-        df = pandas.DataFrame(columns=['frame', 'piezoZ', 'stageZ'])
-        df['frame'] = ptime
-        df['piezoZ'] = pval
-        df['stageZ'] = np.array(sval) - np.array(pval) - \
-                       self.metadata.re_search(r'AcquisitionModeSetup\|ReferenceZ', 0)[0] * 1e6
-
-        # remove duplicates
-        df = df[~df.duplicated('frame', 'last')]
-        return df
-
     @property
     def size(self):
         return np.prod(self.shape)
@@ -1051,6 +1007,10 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
             ome = pool.map(get_ome, (path,))[0]
             return ome
 
+    @cached_property
+    def ome(self):
+        return self.get_ome(self.path)
+
     def is_noise(self, volume=None):
         """ True if volume only has noise """
         if volume is None:
@@ -1093,14 +1053,11 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin):
                     n[i] = (n[i],)
 
             shape = [len(i) for i in n]
-            at_least_one = False
-            with IJTiffFile(fname.with_suffix('.tif'), shape, pixel_type,
+            with TransformTiff(self, fname.with_suffix('.tif'), shape, pixel_type,
                             pxsize=self.pxsize_um, deltaz=self.deltaz_um, **kwargs) as tif:
                 for i, m in tqdm(zip(product(*[range(s) for s in shape]), product(*n)),
                                  total=np.prod(shape), desc='Saving tiff', disable=not bar):
-                    if np.any(self(*m)) or not at_least_one:
-                        tif.save(self(*m), *i)
-                        at_least_one = True
+                    tif.save(m, *i)
 
     def set_transform(self):
         # handle transforms
