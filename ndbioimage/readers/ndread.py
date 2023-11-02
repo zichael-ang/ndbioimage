@@ -15,7 +15,7 @@ class Reader(AbstractReader, ABC):
 
     @cached_property
     def ome(self):
-        def shape(size_x=1, size_y=1, size_c=1, size_z=1, size_t=1):
+        def shape(size_x=1, size_y=1, size_c=1, size_z=1, size_t=1):  # noqa
             return size_x, size_y, size_c, size_z, size_t
         size_x, size_y, size_c, size_z, size_t = shape(*self.array.shape)
         try:
@@ -42,7 +42,7 @@ class Reader(AbstractReader, ABC):
         if isinstance(self.path, np.ndarray):
             self.array = np.array(self.path)
             while self.array.ndim < 5:
-                self.array = np.expand_dims(self.array, -1)
+                self.array = np.expand_dims(self.array, -1)  # noqa
             self.path = 'numpy array'
 
     def __frame__(self, c, z, t):

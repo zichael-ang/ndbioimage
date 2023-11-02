@@ -32,10 +32,10 @@ class Reader(AbstractReader, ABC):
         self.reader = TiffFile(self.path)
         assert self.reader.pages[0].compression == 1, "Can only read uncompressed tiff files."
         assert self.reader.pages[0].samplesperpixel == 1, "Can only read 1 sample per pixel."
-        self.offset = self.reader.pages[0].dataoffsets[0]
-        self.count = self.reader.pages[0].databytecounts[0]
-        self.bytes_per_sample = self.reader.pages[0].bitspersample // 8
-        self.fmt = self.reader.byteorder + self.count // self.bytes_per_sample * 'BHILQ'[self.bytes_per_sample - 1]
+        self.offset = self.reader.pages[0].dataoffsets[0]  # noqa
+        self.count = self.reader.pages[0].databytecounts[0]  # noqa
+        self.bytes_per_sample = self.reader.pages[0].bitspersample // 8  # noqa
+        self.fmt = self.reader.byteorder + self.count // self.bytes_per_sample * 'BHILQ'[self.bytes_per_sample - 1]  # noqa
 
     def close(self):
         self.reader.close()

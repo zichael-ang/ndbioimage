@@ -19,27 +19,27 @@ try:
         def __init__(self, jars=None):
             if not self.vm_started and not self.vm_killed:
                 try:
-                    jarpath = Path(__file__).parent / 'jars'
+                    jar_path = Path(__file__).parent / 'jars'
                     if jars is None:
                         jars = {}
                     for jar, src in jars.items():
-                        if not (jarpath / jar).exists():
-                            JVM.download(src, jarpath / jar)
-                    classpath = [str(jarpath / jar) for jar in jars.keys()]
+                        if not (jar_path / jar).exists():
+                            JVM.download(src, jar_path / jar)
+                    classpath = [str(jar_path / jar) for jar in jars.keys()]
 
                     import jpype
                     jpype.startJVM(classpath=classpath)
-                except Exception:
+                except Exception:  # noqa
                     self.vm_started = False
                 else:
                     self.vm_started = True
                 try:
                     import jpype.imports
-                    from loci.common import DebugTools
-                    from loci.formats import ImageReader
-                    from loci.formats import ChannelSeparator
-                    from loci.formats import FormatTools
-                    from loci.formats import MetadataTools
+                    from loci.common import DebugTools  # noqa
+                    from loci.formats import ImageReader  # noqa
+                    from loci.formats import ChannelSeparator  # noqa
+                    from loci.formats import FormatTools  # noqa
+                    from loci.formats import MetadataTools  # noqa
 
                     DebugTools.setRootLevel("ERROR")
 
@@ -47,7 +47,7 @@ try:
                     self.channel_separator = ChannelSeparator
                     self.format_tools = FormatTools
                     self.metadata_tools = MetadataTools
-                except Exception:
+                except Exception:  # noqa
                     pass
 
             if self.vm_killed:
@@ -64,7 +64,7 @@ try:
             self = cls._instance
             if self is not None and self.vm_started and not self.vm_killed:
                 import jpype
-                jpype.shutdownJVM()
+                jpype.shutdownJVM()  # noqa
             self.vm_started = False
             self.vm_killed = True
 

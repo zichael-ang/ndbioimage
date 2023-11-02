@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from functools import cached_property
 from ome_types import model
-from ome_types.units import _quantity_property
+from ome_types.units import _quantity_property  # noqa
 from itertools import product
 from datetime import datetime
 from abc import ABC
@@ -15,7 +15,10 @@ def lazy_property(function, field, *arg_fields):
     def lazy(self):
         if self.__dict__.get(field) is None:
             self.__dict__[field] = function(*[getattr(self, arg_field) for arg_field in arg_fields])
-            self.model_fields_set.add(field)
+            try:
+                self.model_fields_set.add(field)
+            except Exception:  # noqa
+                pass
         return self.__dict__[field]
     return property(lazy)
 
@@ -24,6 +27,7 @@ class Plane(model.Plane):
     """ Lazily retrieve delta_t from metadata """
     def __init__(self, t0, file, **kwargs):
         super().__init__(**kwargs)
+        # setting fields here because they would be removed by ome_types/pydantic after class definition
         setattr(self.__class__, 'delta_t', lazy_property(self.get_delta_t, 'delta_t', 't0', 'file'))
         setattr(self.__class__, 'delta_t_quantity', _quantity_property('delta_t'))
         self.__dict__['t0'] = t0
@@ -79,7 +83,7 @@ class Reader(AbstractReader, ABC):
         else:
             pixel_type = "uint16"  # assume
 
-        size_c, size_z, size_t = [max(i) + 1 for i in zip(*self.filedict.keys())]
+        size_c, size_z, size_t = (max(i) + 1 for i in zip(*self.filedict.keys()))
         t0 = datetime.strptime(metadata["Info"]["Time"], "%Y-%m-%d %H:%M:%S %z")
         ome.images.append(
             model.Image(
@@ -123,7 +127,7 @@ class Reader(AbstractReader, ABC):
         pattern_c = re.compile(r"img_\d{3,}_(.*)_\d{3,}$")
         pattern_z = re.compile(r"(\d{3,})$")
         pattern_t = re.compile(r"img_(\d{3,})")
-        self.filedict = {(cnamelist.index(pattern_c.findall(file.stem)[0]),
+        self.filedict = {(cnamelist.index(pattern_c.findall(file.stem)[0]),  # noqa
                           int(pattern_z.findall(file.stem)[0]),
                           int(pattern_t.findall(file.stem)[0])): file for file in filelist}
 

@@ -31,7 +31,7 @@ class Reader(AbstractReader, ABC):
                                 filedict[c, z, t].append(directory_entry)
                             else:
                                 filedict[c, z, t] = [directory_entry]
-        self.filedict = filedict
+        self.filedict = filedict  # noqa
 
     def close(self):
         self.reader.close()
@@ -116,8 +116,8 @@ class Reader(AbstractReader, ABC):
         y_max = max([f.start[f.axes.index('Y')] + f.shape[f.axes.index('Y')] for f in self.filedict[0, 0, 0]])
         size_x = x_max - x_min
         size_y = y_max - y_min
-        size_c, size_z, size_t = [self.reader.shape[self.reader.axes.index(directory_entry)]
-                                  for directory_entry in 'CZT']
+        size_c, size_z, size_t = (self.reader.shape[self.reader.axes.index(directory_entry)]
+                                  for directory_entry in 'CZT')
 
         image = information.find("Image")
         pixel_type = text(image.find("PixelType"), "Gray16")
@@ -277,23 +277,23 @@ class Reader(AbstractReader, ABC):
                             text(light_source.find("LightSourceType").find("Laser").find("Wavelength")))))
 
         multi_track_setup = acquisition_block.find("MultiTrackSetup")
-        for idx, tube_lens in enumerate(set(text(track_setup.find("TubeLensPosition"))
-                                            for track_setup in multi_track_setup)):
+        for idx, tube_lens in enumerate({text(track_setup.find("TubeLensPosition"))
+                                         for track_setup in multi_track_setup}):
             ome.instruments[0].objectives.append(
                 model.Objective(id=f"Objective:Tubelens:{idx}", model=tube_lens,
                                 nominal_magnification=float(
                                     re.findall(r'\d+[,.]\d*', tube_lens)[0].replace(',', '.'))
                                 ))
 
-        for idx, filter_ in enumerate(set(text(beam_splitter.find("Filter"))
-                                          for track_setup in multi_track_setup
-                                          for beam_splitter in track_setup.find("BeamSplitters"))):
+        for idx, filter_ in enumerate({text(beam_splitter.find("Filter"))
+                                       for track_setup in multi_track_setup
+                                       for beam_splitter in track_setup.find("BeamSplitters")}):
             ome.instruments[0].filter_sets.append(
                 model.FilterSet(id=f"FilterSet:{idx}", model=filter_)
             )
 
-        for idx, collimator in enumerate(set(text(track_setup.find("FWFOVPosition"))
-                                             for track_setup in multi_track_setup)):
+        for idx, collimator in enumerate({text(track_setup.find("FWFOVPosition"))
+                                          for track_setup in multi_track_setup}):
             ome.instruments[0].filters.append(model.Filter(id=f"Filter:Collimator:{idx}", model=collimator))
 
         x_min = min([f.start[f.axes.index('X')] for f in self.filedict[0, 0, 0]])
@@ -302,8 +302,8 @@ class Reader(AbstractReader, ABC):
         y_max = max([f.start[f.axes.index('Y')] + f.shape[f.axes.index('Y')] for f in self.filedict[0, 0, 0]])
         size_x = x_max - x_min
         size_y = y_max - y_min
-        size_c, size_z, size_t = [self.reader.shape[self.reader.axes.index(directory_entry)]
-                                  for directory_entry in 'CZT']
+        size_c, size_z, size_t = (self.reader.shape[self.reader.axes.index(directory_entry)]
+                                  for directory_entry in 'CZT')
 
         image = information.find("Image")
         pixel_type = text(image.find("PixelType"), "Gray16")

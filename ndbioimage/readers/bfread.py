@@ -153,7 +153,7 @@ class JVMReader:
                         self.queue_out.put(image[..., c])
                     else:
                         self.queue_out.put(image)
-                except queues.Empty:
+                except queues.Empty:  # noqa
                     continue
         except (Exception,):
             print_exc()
@@ -171,7 +171,7 @@ def can_open(path):
     except (Exception,):
         return False
     finally:
-        jvm.kill_vm()
+        jvm.kill_vm()  # noqa
 
 
 class Reader(AbstractReader, ABC):
