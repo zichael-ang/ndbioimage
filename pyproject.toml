@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ndbioimage"
-version = "2023.10.2"
+version = "2023.10.3"
 description = "Bio image reading, metadata and some affine registration."
 authors = ["W. Pomp <w.pomp@nki.nl>"]
 license = "GPLv3"
@@ -25,6 +25,7 @@ pyyaml = "*"
 parfor = ">=2023.10.1"
 JPype1 = "*"
 SimpleITK-SimpleElastix = "*"
+scikit-image = "*"
 pytest = { version = "*", optional = true }
 
 [tool.poetry.extras]
