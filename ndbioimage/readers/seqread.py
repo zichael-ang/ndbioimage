@@ -1,13 +1,15 @@
+import re
+from abc import ABC
+from datetime import datetime
+from functools import cached_property
+from itertools import product
+from pathlib import Path
+
 import tifffile
 import yaml
-import re
-from pathlib import Path
-from functools import cached_property
 from ome_types import model
 from ome_types.units import _quantity_property  # noqa
-from itertools import product
-from datetime import datetime
-from abc import ABC
+
 from .. import AbstractReader
 
 

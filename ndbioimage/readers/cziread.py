@@ -1,12 +1,14 @@
-import czifile
-import numpy as np
 import re
-from lxml import etree
-from ome_types import model
 from abc import ABC
 from functools import cached_property
 from itertools import product
 from pathlib import Path
+
+import czifile
+import numpy as np
+from lxml import etree
+from ome_types import model
+
 from .. import AbstractReader
 
 

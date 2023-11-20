@@ -1,10 +1,11 @@
 import multiprocessing
-import numpy as np
 from abc import ABC
 from multiprocessing import queues
 from traceback import print_exc
-from .. import AbstractReader, JVM
 
+import numpy as np
+
+from .. import JVM, AbstractReader
 
 jars = {'bioformats_package.jar':
             'https://downloads.openmicroscopy.org/bio-formats/latest/artifacts/bioformats_package.jar'}

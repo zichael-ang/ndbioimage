@@ -1,11 +1,13 @@
+from abc import ABC
+from functools import cached_property
+from itertools import product
+from pathlib import Path
+
 import numpy as np
 import tifffile
 import yaml
-from abc import ABC
-from functools import cached_property
 from ome_types import model
-from pathlib import Path
-from itertools import product
+
 from .. import AbstractReader
 
 

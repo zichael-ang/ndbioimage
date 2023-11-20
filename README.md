@@ -77,4 +77,3 @@ for example: any file handles
 
 # TODO
 - more image formats
-- re-implement transforms 

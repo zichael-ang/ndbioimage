@@ -36,9 +36,9 @@ try:
                 try:
                     import jpype.imports
                     from loci.common import DebugTools  # noqa
-                    from loci.formats import ImageReader  # noqa
                     from loci.formats import ChannelSeparator  # noqa
                     from loci.formats import FormatTools  # noqa
+                    from loci.formats import ImageReader  # noqa
                     from loci.formats import MetadataTools  # noqa
 
                     DebugTools.setRootLevel("ERROR")

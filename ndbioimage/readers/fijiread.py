@@ -1,12 +1,14 @@
 from abc import ABC
-from tifffile import TiffFile
 from functools import cached_property
 from itertools import product
-from ome_types import model
 from pathlib import Path
 from struct import unpack
 from warnings import warn
+
 import numpy as np
+from ome_types import model
+from tifffile import TiffFile
+
 from .. import AbstractReader
 
 

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ndbioimage"
-version = "2023.10.3"
+version = "2023.11.0"
 description = "Bio image reading, metadata and some affine registration."
 authors = ["W. Pomp <w.pomp@nki.nl>"]
 license = "GPLv3"
@@ -33,6 +33,9 @@ test = ["pytest-xdist"]
 
 [tool.poetry.scripts]
 ndbioimage = "ndbioimage:main"
+
+[tool.pytest.ini_options]
+filterwarnings = ["ignore:::(colorcet)"]
 
 [build-system]
 requires = ["poetry-core"]

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-from parfor import pmap, Chunks
+from parfor import Chunks, pmap
 from skimage import filters
 from tiffwrite import IJTiffFile
 from tqdm.auto import tqdm
@@ -255,9 +255,9 @@ class Transforms(dict):
 class Transform:
     def __init__(self):
         if sitk is None:
-            raise ImportError('SimpleElastix is not installed: '
-                              'https://simpleelastix.readthedocs.io/GettingStarted.html')
-        self.transform = sitk.ReadTransform(str(Path(__file__).parent / 'transform.txt'))
+            self.transform = None
+        else:
+            self.transform = sitk.ReadTransform(str(Path(__file__).parent / 'transform.txt'))
         self.dparameters = [0., 0., 0., 0., 0., 0.]
         self.shape = [512., 512.]
         self.origin = [255.5, 255.5]
@@ -275,6 +275,9 @@ class Transform:
     @classmethod
     def register(cls, fix, mov, kind=None):
         """ kind: 'affine', 'translation', 'rigid' """
+        if sitk is None:
+            raise ImportError('SimpleElastix is not installed: '
+                              'https://simpleelastix.readthedocs.io/GettingStarted.html')
         new = cls()
         kind = kind or 'affine'
         new.shape = fix.shape
@@ -342,7 +345,7 @@ class Transform:
 
     @staticmethod
     def cast_image(im):
-        if not isinstance(im, sitk.Image):
+        if isinstance(im, sitk.Image):
             im = sitk.GetImageFromArray(im)
         return im
 
@@ -376,24 +379,30 @@ class Transform:
 
     @property
     def parameters(self):
-        return list(self.transform.GetParameters())
+        if self.transform is not None:
+            return list(self.transform.GetParameters())
 
     @parameters.setter
     def parameters(self, value):
-        value = np.asarray(value)
-        self.transform.SetParameters(value.tolist())
+        if self.transform is not None:
+            value = np.asarray(value)
+            self.transform.SetParameters(value.tolist())
 
     @property
     def origin(self):
-        return self.transform.GetFixedParameters()
+        if self.transform is not None:
+            return self.transform.GetFixedParameters()
 
     @origin.setter
     def origin(self, value):
-        value = np.asarray(value)
-        self.transform.SetFixedParameters(value.tolist())
+        if self.transform is not None:
+            value = np.asarray(value)
+            self.transform.SetFixedParameters(value.tolist())
 
     @property
     def inverse(self):
+        if self.is_unity():
+            return self
         if self._last is None or self._last != self.asdict():
             self._last = self.asdict()
             self._inverse = Transform.from_dict(self.asdict())
@@ -414,6 +423,9 @@ class Transform:
         if self.is_unity():
             return im
         else:
+            if sitk is None:
+                raise ImportError('SimpleElastix is not installed: '
+                                  'https://simpleelastix.readthedocs.io/GettingStarted.html')
             dtype = im.dtype
             im = im.astype('float')
             intp = sitk.sitkBSpline if np.issubdtype(dtype, np.floating) else sitk.sitkNearestNeighbor

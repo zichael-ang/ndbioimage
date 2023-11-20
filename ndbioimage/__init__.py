@@ -277,7 +277,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 new_slice.append(s[e])
 
         # TODO: check output dimensionality when requested shape in some dimension is 1
-        if all([isinstance(s, Number) or s.size == 1 for s in new_slice]):
+        if (all([isinstance(s, Number) for s in new_slice[:len(self.axes)]])
+                and all([isinstance(s, Number) or s.size == 1 for s in new_slice[len(self.axes):]])):
             return self.block(*new_slice).item()
         else:
             new = View(self)

@@ -1,8 +1,8 @@
-import pytest
-import numpy as np
-from ndbioimage import Imread
 from itertools import product
 
+import numpy as np
+import pytest
+from ndbioimage import Imread
 
 r = np.random.randint(0, 255, (64, 64, 2, 3, 4))
 im = Imread(r)
