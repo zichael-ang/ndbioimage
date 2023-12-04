@@ -98,11 +98,17 @@ class Reader(AbstractReader, ABC):
                     nominal_magnification=float(text(objective.find("NominalMagnification")))))
 
         for tubelens in instrument.find("TubeLenses"):
+            try:
+                nominal_magnification = float(re.findall(r'\d+(?:[,.]\d*)?',
+                                                         tubelens.attrib["Name"])[0].replace(',', '.'))
+            except Exception:
+                nominal_magnification = 1.0
+
             ome.instruments[0].objectives.append(
                 model.Objective(
                     id=f'Objective:{tubelens.attrib["Id"]}',
                     model=tubelens.attrib["Name"],
-                    nominal_magnification=1.0))  # TODO: nominal_magnification
+                    nominal_magnification=nominal_magnification))
 
         for light_source in def_list(instrument.find("LightSources")):
             if light_source.find("LightSourceType").find("Laser") is not None:
@@ -126,8 +132,11 @@ class Reader(AbstractReader, ABC):
         if pixel_type.startswith("Gray"):
             pixel_type = "uint" + pixel_type[4:]
         objective_settings = image.find("ObjectiveSettings")
-        scenes = image.find("Dimensions").find("S").find("Scenes")
-        center_position = [float(pos) for pos in text(scenes[0].find("CenterPosition")).split(',')]
+        try:  # TODO
+            scenes = image.find("Dimensions").find("S").find("Scenes")
+            center_position = [float(pos) for pos in text(scenes[0].find("CenterPosition")).split(',')]
+        except AttributeError:
+            center_position = [0, 0]
         um = model.UnitsLength.MICROMETER
         nm = model.UnitsLength.NANOMETER
 
@@ -174,31 +183,35 @@ class Reader(AbstractReader, ABC):
 
             light_sources_settings = channel.find("LightSourcesSettings")
             # no space in ome for multiple lightsources simultaneously
-            light_source_settings = light_sources_settings[0]
-            light_source_settings = model.LightSourceSettings(
-                id="LightSource:" + "_".join([light_source_settings.find("LightSource").attrib["Id"]
-                                              for light_source_settings in light_sources_settings]),
-                attenuation=float(text(light_source_settings.find("Attenuation"))),
-                wavelength=float(text(light_source_settings.find("Wavelength"))),
-                wavelength_unit=nm)
+            if light_sources_settings is not None:
+                light_source_settings = light_sources_settings[0]
+                light_source_settings = model.LightSourceSettings(
+                    id="LightSource:" + "_".join([light_source_settings.find("LightSource").attrib["Id"]
+                                                  for light_source_settings in light_sources_settings]),
+                    attenuation=float(text(light_source_settings.find("Attenuation"))),
+                    wavelength=float(text(light_source_settings.find("Wavelength"))),
+                    wavelength_unit=nm)
+            else:
+                light_source_settings = None
 
             ome.images[0].pixels.channels.append(
                 model.Channel(
                     id=f"Channel:{idx}",
                     name=channel.attrib["Name"],
-                    acquisition_mode=text(channel.find("AcquisitionMode")),
+                    acquisition_mode=text(channel.find("AcquisitionMode")).replace('SingleMoleculeLocalisation',
+                                                                                   'SingleMoleculeImaging'),
                     color=model.Color(text(channels_ds[channel.attrib["Id"]].find("Color"), 'white')),
                     detector_settings=model.DetectorSettings(
                         id=detector.attrib["Id"].replace(" ", ""),
                         binning=binning),
-                    emission_wavelength=text(channel.find("EmissionWavelength")),
+                    emission_wavelength=i if (i := text(channel.find("EmissionWavelength"))) != '0' else '100',
                     excitation_wavelength=text(channel.find("ExcitationWavelength")),
                     # filter_set_ref=model.FilterSetRef(id=ome.instruments[0].filter_sets[filterset_idx].id),
                     illumination_type=text(channel.find("IlluminationType")),
                     light_source_settings=light_source_settings,
-                    samples_per_pixel=int(text(laser_scan_info.find("Averaging")))))
+                    samples_per_pixel=int(text(laser_scan_info.find("Averaging"), "1"))))
 
-        exposure_times = [float(text(channel.find("LaserScanInfo").find("FrameTime"))) for channel in
+        exposure_times = [float(text(channel.find("LaserScanInfo").find("FrameTime"), "100")) for channel in
                           channels_im.values()]
         delta_ts = attachments['TimeStamps'].data()
         for t, z, c in product(range(size_t), range(size_z), range(size_c)):

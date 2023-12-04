@@ -828,7 +828,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             volume = self
         fft = np.fft.fftn(volume)
         corr = np.fft.fftshift(np.fft.ifftn(fft * fft.conj()).real / np.sum(volume ** 2))
-        return -np.log(1 - corr[tuple([0] * corr.ndim)]) > 5
+        return 1 - corr[tuple([0] * corr.ndim)] < 0.0067
 
     @staticmethod
     def kill_vm():
@@ -882,13 +882,16 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         if file is None:
             file = Path(view.path.parent) / 'transform.yml'
         if not bead_files:
-            bead_files = Transforms.get_bead_files(view.path.parent)
+            try:
+                bead_files = Transforms.get_bead_files(view.path.parent)
+            except Exception:
+                if not file.exists():
+                    raise Exception('No transform file and no bead file found.')
+                bead_files = ()
 
         if channels:
             try:
                 view.transform = Transforms.from_file(file, T=drift)
-                # for key in view.channel_names:
-                #     if
             except Exception:  # noqa
                 view.transform = Transforms().with_beads(view.cyllens, bead_files)
                 if drift:

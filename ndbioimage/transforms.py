@@ -345,8 +345,8 @@ class Transform:
 
     @staticmethod
     def cast_image(im):
-        if isinstance(im, sitk.Image):
-            im = sitk.GetImageFromArray(im)
+        if not isinstance(im, sitk.Image):
+            im = sitk.GetImageFromArray(np.asarray(im))
         return im
 
     @staticmethod
