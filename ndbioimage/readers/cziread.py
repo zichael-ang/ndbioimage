@@ -1,15 +1,150 @@
 import re
 from abc import ABC
 from functools import cached_property
+from io import BytesIO
 from itertools import product
 from pathlib import Path
 
 import czifile
+import imagecodecs
 import numpy as np
 from lxml import etree
 from ome_types import model
+from tifffile import repeat_nd
 
 from .. import AbstractReader
+
+try:
+    # TODO: use zoom from imagecodecs implementation when available
+    from scipy.ndimage.interpolation import zoom
+except ImportError:
+    try:
+        from ndimage.interpolation import zoom
+    except ImportError:
+        zoom = None
+
+
+def zstd_decode(data: bytes) -> bytes:
+    """ decode zstd bytes, copied from BioFormats ZeissCZIReader """
+    def read_var_int(stream: BytesIO) -> int:
+        a = stream.read(1)[0]
+        if a & 128:
+            b = stream.read(1)[0]
+            if b & 128:
+                c = stream.read(1)[0]
+                return (c << 14) | ((b & 127) << 7) | (a & 127)
+            return (b << 7) | (a & 127)
+        return a & 255
+
+    try:
+        with BytesIO(data) as stream:
+            size_of_header = read_var_int(stream)
+            high_low_unpacking = False
+            while stream.tell() < size_of_header:
+                chunk_id = read_var_int(stream)
+                # only one chunk ID defined so far
+                if chunk_id == 1:
+                    high_low_unpacking = (stream.read(1)[0] & 1) == 1
+                else:
+                    raise ValueError(f'Invalid chunk id: {chunk_id}')
+            pointer = stream.tell()
+    except Exception:
+        high_low_unpacking = False
+        pointer = 0
+
+    decoded = imagecodecs.zstd_decode(data[pointer:])
+    if high_low_unpacking:
+        second_half = len(decoded) // 2
+        return bytes([decoded[second_half + i // 2] if i % 2 else decoded[i // 2] for i in range(len(decoded))])
+    else:
+        return decoded
+
+
+def data(self, raw=False, resize=True, order=0):
+    """Read image data from file and return as numpy array."""
+    DECOMPRESS = czifile.czifile.DECOMPRESS
+    DECOMPRESS[5] = imagecodecs.zstd_decode
+    DECOMPRESS[6] = zstd_decode
+
+    de = self.directory_entry
+    fh = self._fh
+    if raw:
+        with fh.lock:
+            fh.seek(self.data_offset)
+            data = fh.read(self.data_size)
+        return data
+    if de.compression:
+        # if de.compression not in DECOMPRESS:
+        #     raise ValueError('compression unknown or not supported')
+        with fh.lock:
+            fh.seek(self.data_offset)
+            data = fh.read(self.data_size)
+        data = DECOMPRESS[de.compression](data)
+        if de.compression == 2:
+            # LZW
+            data = np.fromstring(data, de.dtype)  # noqa
+        elif de.compression in (5, 6):
+            # ZSTD
+            data = np.frombuffer(data, de.dtype)
+    else:
+        dtype = np.dtype(de.dtype)
+        with fh.lock:
+            fh.seek(self.data_offset)
+            data = fh.read_array(dtype, self.data_size // dtype.itemsize)
+
+    data = data.reshape(de.stored_shape)
+    if de.compression != 4 and de.stored_shape[-1] in (3, 4):
+        if de.stored_shape[-1] == 3:
+            # BGR -> RGB
+            data = data[..., ::-1]
+        else:
+            # BGRA -> RGBA
+            tmp = data[..., 0].copy()
+            data[..., 0] = data[..., 2]
+            data[..., 2] = tmp
+    if de.stored_shape == de.shape or not resize:
+        return data
+
+    # sub / supersampling
+    factors = [j / i for i, j in zip(de.stored_shape, de.shape)]
+    factors = [(int(round(f)) if abs(f - round(f)) < 0.0001 else f)
+               for f in factors]
+
+    # use repeat if possible
+    if order == 0 and all(isinstance(f, int) for f in factors):
+        data = repeat_nd(data, factors).copy()
+        data.shape = de.shape
+        return data
+
+    # remove leading dimensions with size 1 for speed
+    shape = list(de.stored_shape)
+    i = 0
+    for s in shape:
+        if s != 1:
+            break
+        i += 1
+    shape = shape[i:]
+    factors = factors[i:]
+    data.shape = shape
+
+    # resize RGB components separately for speed
+    if zoom is None:
+        raise ImportError("cannot import 'zoom' from scipy or ndimage")
+    if shape[-1] in (3, 4) and factors[-1] == 1.0:
+        factors = factors[:-1]
+        old = data
+        data = np.empty(de.shape, de.dtype[-2:])
+        for i in range(shape[-1]):
+            data[..., i] = zoom(old[..., i], zoom=factors, order=order)
+    else:
+        data = zoom(data, zoom=factors, order=order)
+
+    data.shape = de.shape
+    return data
+
+
+# monkeypatch zstd into czifile
+czifile.czifile.SubBlockSegment.data = data
 
 
 class Reader(AbstractReader, ABC):
