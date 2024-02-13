@@ -962,11 +962,11 @@ class AbstractReader(Imread, metaclass=ABCMeta):
         if isinstance(path, str):
             path = Path(path)
         self.path, self.series = self.split_path_series(path)
-        if isinstance(path, Path):
+        if isinstance(path, Path) and path.exists():
             self.title = self.path.name
             self.acquisitiondate = datetime.fromtimestamp(self.path.stat().st_mtime).strftime('%y-%m-%dT%H:%M:%S')
         else:  # ndarray
-            self.title = 'ndarray'
+            self.title = self.__class__.__name__
             self.acquisitiondate = 'now'
 
         self.reader = None

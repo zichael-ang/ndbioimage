@@ -354,7 +354,7 @@ class Reader(AbstractReader, ABC):
                 model.Plane(the_c=c, the_z=z, the_t=t, delta_t=delta_ts[t], exposure_time=exposure_times[c]))
 
         idx = 0
-        for layer in metadata.find("Layers"):
+        for layer in metadata.find("Layers") or []:
             rectangle = layer.find("Elements").find("Rectangle")
             if rectangle is not None:
                 geometry = rectangle.find("Geometry")
@@ -552,7 +552,7 @@ class Reader(AbstractReader, ABC):
                             position_z=float(positions.attrib["Z"]), position_z_unit=um))
 
         idx = 0
-        for layer in metadata.find("Layers"):
+        for layer in [] if (ml := metadata.find("Layers")) is None else ml:
             rectangle = layer.find("Elements").find("Rectangle")
             if rectangle is not None:
                 geometry = rectangle.find("Geometry")

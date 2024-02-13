@@ -51,6 +51,8 @@ class Reader(AbstractReader, ABC):
                          'float', 'double', 'complex', 'double-complex', 'bit'):
             dtype = 'float'
 
+        interval_t = metadata.get('interval', 0)
+
         ome = model.OME()
         ome.instruments.append(model.Instrument(id='Instrument:0'))
         ome.instruments[0].objectives.append(model.Objective(id='Objective:0'))
@@ -63,7 +65,7 @@ class Reader(AbstractReader, ABC):
                     dimension_order="XYCZT", type=dtype, physical_size_x=pxsize, physical_size_y=pxsize),
                 objective_settings=model.ObjectiveSettings(id="Objective:0")))
         for c, z, t in product(range(size_c), range(size_z), range(size_t)):
-            ome.images[0].pixels.planes.append(model.Plane(the_c=c, the_z=z, the_t=t, delta_t=0))
+            ome.images[0].pixels.planes.append(model.Plane(the_c=c, the_z=z, the_t=t, delta_t=interval_t * t))
         return ome
 
     def open(self):
