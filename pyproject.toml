@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ndbioimage"
-version = "2024.3.0"
+version = "2024.3.1"
 description = "Bio image reading, metadata and some affine registration."
 authors = ["W. Pomp <w.pomp@nki.nl>"]
 license = "GPLv3"
@@ -27,6 +27,7 @@ JPype1 = "*"
 SimpleITK-SimpleElastix = "*"
 scikit-image = "*"
 imagecodecs = "*"
+xsdata = "^23"  # until pydantic is up-to-date
 pytest = { version = "*", optional = true }
 
 [tool.poetry.extras]
