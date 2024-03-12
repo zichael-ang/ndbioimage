@@ -653,6 +653,9 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         return self.__array_fun__([np.nansum, np.nansum, np.sum], axis, dtype, out, keepdims, None, where,
                                   (sfun, s2fun, nfun), cfun)
 
+    def flatten(self, *args, **kwargs):
+        return np.asarray(self).flatten(*args, **kwargs)
+
     @wraps(np.reshape)
     def reshape(self, *args, **kwargs):
         return np.asarray(self).reshape(*args, **kwargs)
