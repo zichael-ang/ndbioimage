@@ -106,7 +106,7 @@ def get_ome(path):
 
 
 class Shape(tuple):
-    def __new__(cls, shape, axes='xyczt'):
+    def __new__(cls, shape, axes='yxczt'):
         if isinstance(shape, Shape):
             axes = shape.axes
         instance = super().__new__(cls, shape)
@@ -122,8 +122,8 @@ class Shape(tuple):
         return super().__getitem__(n)
 
     @cached_property
-    def xyczt(self):
-        return tuple(self[i] for i in 'xyczt')
+    def yxczt(self):
+        return tuple(self[i] for i in 'yxczt')
 
 
 class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
@@ -225,8 +225,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
 
         for idx in unique_yield([key[:3] for key in self.cache.keys()],
                                 product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t']))):
-            xyczt = (slice(None), slice(None)) + idx
-            in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+            yxczt = (slice(None), slice(None)) + idx
+            in_idx = tuple(yxczt['yxczt'.find(i)] for i in self.axes)
             if item in np.asarray(self[in_idx]):
                 return True
         return False
@@ -266,7 +266,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         while len(n) < self.ndim:
             n.append(None)
 
-        axes_idx = [self.shape.axes.find(i) for i in 'xyczt']
+        axes_idx = [self.shape.axes.find(i) for i in 'yxczt']
         n = [n[j] if 0 <= j < len(n) else None for j in axes_idx]  # reorder n
 
         new_slice = []
@@ -283,7 +283,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             new = View(self)
             new.slice = new_slice
             new._shape = Shape([1 if isinstance(s, Number) else len(s) for s in new_slice])
-            new.axes = ''.join(j for j in self.axes if j in [i for i, s in zip('xyczt', new_slice)
+            new.axes = ''.join(j for j in self.axes if j in [i for i, s in zip('yxczt', new_slice)
                                                              if not isinstance(s, Number)])
             return new
 
@@ -308,7 +308,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
 
     def __array__(self, dtype=None):
         block = self.block(*self.slice)
-        axes_idx = [self.shape.axes.find(i) for i in 'xyczt']
+        axes_idx = [self.shape.axes.find(i) for i in 'yxczt']
         axes_squeeze = tuple({i for i, j in enumerate(axes_idx) if j == -1}.union(
             {i for i, j in enumerate(self.slice) if isinstance(j, Number)}))
         block = block.squeeze(axes_squeeze)
@@ -316,7 +316,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             block = block.astype(dtype)
         if block.ndim == 0:
             return block.item()
-        axes = ''.join(j for i, j in enumerate('xyczt') if i not in axes_squeeze)
+        axes = ''.join(j for i, j in enumerate('yxczt') if i not in axes_squeeze)
         return block.transpose([axes.find(i) for i in self.shape.axes if i in axes])
 
     def __array_arg_fun__(self, fun, axis=None, out=None):
@@ -324,8 +324,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         if axis is None:
             value = arg = None
             for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                xyczt = (slice(None), slice(None)) + idx
-                in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+                yxczt = (slice(None), slice(None)) + idx
+                in_idx = tuple(yxczt['yxczt'.find(i)] for i in self.axes)
                 new = np.asarray(self[in_idx])
                 new_arg = np.unravel_index(fun(new), new.shape)
                 new_value = new[new_arg]
@@ -336,7 +336,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                     i = fun((value, new_value))
                     arg = (arg, new_arg + idx)[i]
                     value = (value, new_value)[i]
-            axes = ''.join(i for i in self.axes if i in 'xy') + 'czt'
+            axes = ''.join(i for i in self.axes if i in 'yx') + 'czt'
             arg = np.ravel_multi_index([arg[axes.find(i)] for i in self.axes], self.shape)
             if out is None:
                 return arg
@@ -356,19 +356,19 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             out_axes.pop(axis_idx)
             if out is None:
                 out = np.zeros(out_shape, int)
-            if axis_str in 'xy':
+            if axis_str in 'yx':
                 for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                    xyczt = (slice(None), slice(None)) + idx
-                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
-                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+                    yxczt = (slice(None), slice(None)) + idx
+                    out_idx = tuple(yxczt['yxczt'.find(i)] for i in out_axes)
+                    in_idx = tuple(yxczt['yxczt'.find(i)] for i in self.axes)
                     new = self[in_idx]
                     out[out_idx] = fun(np.asarray(new), new.axes.find(axis_str))
             else:
                 value = np.zeros(out.shape, self.dtype)
                 for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                    xyczt = (slice(None), slice(None)) + idx
-                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
-                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+                    yxczt = (slice(None), slice(None)) + idx
+                    out_idx = tuple(yxczt['yxczt'.find(i)] for i in out_axes)
+                    in_idx = tuple(yxczt['yxczt'.find(i)] for i in self.axes)
                     new_value = self[in_idx]
                     new_arg = np.full_like(new_value, idx['czt'.find(axis_str)])
                     if idx['czt'.find(axis_str)] == 0:
@@ -401,8 +401,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         # TODO: smarter transforms
         if axis is None:
             for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                xyczt = (slice(None), slice(None)) + idx
-                in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+                yxczt = (slice(None), slice(None)) + idx
+                in_idx = tuple(yxczt['yxczt'.find(i)] for i in self.axes)
                 w = where if where is None or isinstance(where, bool) else where[in_idx]
                 initials = [fun(np.asarray(ffun(self[in_idx])), initial=initial, where=w)
                             for fun, ffun, initial in zip(funs, ffuns, initials)]
@@ -430,13 +430,13 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 out_axes.pop(axis_idx)
             if out is None:
                 out = np.zeros(out_shape, dtype)
-            if axis_str in 'xy':
-                xy = 'xy' if self.axes.find('x') < self.axes.find('y') else 'yx'
-                frame_ax = xy.find(axis_str)
+            if axis_str in 'yx':
+                yx = 'yx' if self.axes.find('x') > self.axes.find('y') else 'yx'
+                frame_ax = yx.find(axis_str)
                 for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                    xyczt = (slice(None), slice(None)) + idx
-                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
-                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+                    yxczt = (slice(None), slice(None)) + idx
+                    out_idx = tuple(yxczt['yxczt'.find(i)] for i in out_axes)
+                    in_idx = tuple(yxczt['yxczt'.find(i)] for i in self.axes)
                     w = where if where is None or isinstance(where, bool) else where[in_idx]
                     res = cfun(*[fun(ffun(self[in_idx]), frame_ax, initial=initial, where=w)
                                  for fun, ffun, initial in zip(funs, ffuns, initials)])
@@ -444,9 +444,9 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             else:
                 tmps = [np.zeros(out_shape) for _ in ffuns]
                 for idx in product(range(self.shape['c']), range(self.shape['z']), range(self.shape['t'])):
-                    xyczt = (slice(None), slice(None)) + idx
-                    out_idx = tuple(xyczt['xyczt'.find(i)] for i in out_axes)
-                    in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
+                    yxczt = (slice(None), slice(None)) + idx
+                    out_idx = tuple(yxczt['yxczt'.find(i)] for i in out_axes)
+                    in_idx = tuple(yxczt['yxczt'.find(i)] for i in self.axes)
 
                     if idx['czt'.find(axis_str)] == 0:
                         w = where if where is None or isinstance(where, bool) else (where[in_idx],)
@@ -512,7 +512,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         if isinstance(value, Shape):
             self._shape = value
         else:
-            self._shape = Shape((value['xyczt'.find(i.lower())] for i in self.axes), self.axes)
+            self._shape = Shape((value['yxczt'.find(i.lower())] for i in self.axes), self.axes)
 
     @property
     def summary(self):
@@ -730,13 +730,13 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         new.dtype = dtype
         return new
 
-    def block(self, x=None, y=None, c=None, z=None, t=None):
+    def block(self, y=None, x=None, c=None, z=None, t=None):
         """ returns 5D block of frames """
-        x, y, c, z, t = (np.arange(self.shape[i]) if e is None else np.array(e, ndmin=1)
-                         for i, e in zip('xyczt', (x, y, c, z, t)))
-        d = np.empty((len(x), len(y), len(c), len(z), len(t)), self.dtype)
+        y, x, c, z, t = (np.arange(self.shape[i]) if e is None else np.array(e, ndmin=1)
+                         for i, e in zip('yxczt', (y, x, c, z, t)))
+        d = np.empty((len(y), len(x), len(c), len(z), len(t)), self.dtype)
         for (ci, cj), (zi, zj), (ti, tj) in product(enumerate(c), enumerate(z), enumerate(t)):
-            d[:, :, ci, zi, ti] = self.frame(cj, zj, tj)[x][:, y]
+            d[:, :, ci, zi, ti] = self.frame(cj, zj, tj)[y][:, x]
         return d
 
     def copy(self):
@@ -906,7 +906,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 view.transform = Transforms.from_file(file, C=False)
             except Exception:  # noqa
                 view.transform = Transforms().with_drift(self)
-        view.transform.adapt(view.frameoffset, view.shape.xyczt, view.channel_names)
+        view.transform.adapt(view.frameoffset, view.shape.yxczt, view.channel_names)
         return view
 
     @staticmethod
@@ -944,7 +944,7 @@ class AbstractReader(Imread, metaclass=ABCMeta):
 
     @abstractmethod
     def __frame__(self, c, z, t):  # Override this, return the frame at c, z, t
-        return np.random.randint(0, 255, self.shape['xy'])
+        return np.random.randint(0, 255, self.shape['yx'])
 
     @cached_property
     def ome(self):
@@ -989,7 +989,7 @@ class AbstractReader(Imread, metaclass=ABCMeta):
         instrument = self.ome.instruments[0] if self.ome.instruments else None
         image = self.ome.images[0]
         pixels = image.pixels
-        self.shape = pixels.size_x, pixels.size_y, pixels.size_c, pixels.size_z, pixels.size_t
+        self.shape = pixels.size_y, pixels.size_x, pixels.size_c, pixels.size_z, pixels.size_t
         self.dtype = pixels.type.value if dtype is None else dtype
         self.pxsize = pixels.physical_size_x_quantity
         try:
@@ -1053,12 +1053,12 @@ class AbstractReader(Imread, metaclass=ABCMeta):
         self.exposuretime_s = [None if i is None else i.to(self.ureg.s).m for i in self.exposuretime]
 
         if axes is None:
-            self.axes = ''.join(i for i in 'cztxy' if self.shape[i] > 1)
+            self.axes = ''.join(i for i in 'cztyx' if self.shape[i] > 1)
         elif axes.lower() == 'full':
-            self.axes = 'cztxy'
+            self.axes = 'cztyx'
         else:
             self.axes = axes
-        self.slice = [np.arange(s, dtype=int) for s in self.shape.xyczt]
+        self.slice = [np.arange(s, dtype=int) for s in self.shape.yxczt]
 
         m = self.extrametadata
         if m is not None:

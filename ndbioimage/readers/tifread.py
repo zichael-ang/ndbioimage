@@ -30,8 +30,8 @@ class Reader(AbstractReader, ABC):
 
         page = self.reader.pages[0]
         self.p_ndim = page.ndim  # noqa
-        size_x = page.imagelength
-        size_y = page.imagewidth
+        size_y = page.imagelength
+        size_x = page.imagewidth
         if self.p_ndim == 3:
             size_c = page.samplesperpixel
             self.p_transpose = [i for i in [page.axes.find(j) for j in 'SYX'] if i >= 0]  # noqa

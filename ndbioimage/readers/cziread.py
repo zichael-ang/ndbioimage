@@ -570,7 +570,7 @@ class Reader(AbstractReader, ABC):
         return ome
 
     def __frame__(self, c=0, z=0, t=0):
-        f = np.zeros(self.base.shape['xy'], self.dtype)
+        f = np.zeros(self.base.shape['yx'], self.dtype)
         if (c, z, t) in self.filedict:
             directory_entries = self.filedict[c, z, t]
             x_min = min([f.start[f.axes.index('X')] for f in directory_entries])
@@ -582,7 +582,7 @@ class Reader(AbstractReader, ABC):
                 axes_min = [xy_min.get(ax, 0) for ax in directory_entry.axes]
                 index = [slice(i - j - m, i - j + k)
                          for i, j, k, m in zip(directory_entry.start, self.reader.start, tile.shape, axes_min)]
-                index = tuple(index[self.reader.axes.index(i)] for i in 'XY')
+                index = tuple(index[self.reader.axes.index(i)] for i in 'YX')
                 f[index] = tile.squeeze()
         return f
 

@@ -52,7 +52,7 @@ class Reader(AbstractReader, ABC):
         # in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
         # print(f'{in_idx = }')
         frame = self.array[:, :, c, z, t]
-        if self.axes.find('y') < self.axes.find('x'):
+        if self.axes.find('y') > self.axes.find('x'):
             return frame.T
         else:
             return frame
