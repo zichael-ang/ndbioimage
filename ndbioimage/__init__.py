@@ -987,7 +987,7 @@ class AbstractReader(Imread, metaclass=ABCMeta):
         self.open()
         # extract some metadata from ome
         instrument = self.ome.instruments[0] if self.ome.instruments else None
-        image = self.ome.images[0]
+        image = self.ome.images[self.series]
         pixels = image.pixels
         self.shape = pixels.size_y, pixels.size_x, pixels.size_c, pixels.size_z, pixels.size_t
         self.dtype = pixels.type.value if dtype is None else dtype
@@ -1003,8 +1003,8 @@ class AbstractReader(Imread, metaclass=ABCMeta):
             self.deltaz_um = None if self.deltaz is None else self.deltaz.to(self.ureg.um).m
         else:
             self.deltaz = self.deltaz_um = None
-        if self.ome.images[0].objective_settings:
-            self.objective = find(instrument.objectives, id=self.ome.images[0].objective_settings.id)
+        if self.ome.images[self.series].objective_settings:
+            self.objective = find(instrument.objectives, id=self.ome.images[self.series].objective_settings.id)
         else:
             self.objective = None
         try:
@@ -1107,7 +1107,7 @@ class AbstractReader(Imread, metaclass=ABCMeta):
         p = re.compile(r'(\d+):(\d+)$')
         try:
             self.track, self.detector = zip(*[[int(i) for i in p.findall(find(
-                self.ome.images[0].pixels.channels, id=f'Channel:{c}').detector_settings.id)[0]]
+                self.ome.images[self.series].pixels.channels, id=f'Channel:{c}').detector_settings.id)[0]]
                                               for c in range(self.shape['c'])])
         except Exception:
             pass
