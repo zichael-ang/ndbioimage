@@ -16,7 +16,7 @@ from traceback import print_exc
 import numpy as np
 import ome_types
 import yaml
-from ome_types import model, ureg
+from ome_types import model, ureg, OME
 from pint import set_application_registry
 from tiffwrite import IJTiffFile
 from tqdm.auto import tqdm
@@ -77,8 +77,11 @@ class DequeDict(OrderedDict):
 
 def find(obj, **kwargs):
     for item in obj:
-        if all([getattr(item, key) == value for key, value in kwargs.items()]):
-            return item
+        try:
+            if all([getattr(item, key) == value for key, value in kwargs.items()]):
+                return item
+        except AttributeError:
+            pass
 
 
 def try_default(fun, default, *args, **kwargs):
@@ -538,11 +541,11 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         if self.laserpowers:
             s.append('laser powers:  ' + ' | '.join([' & '.join(len(p) * ('{:.3g}',)).format(*[100 * i for i in p])
                                                      for p in self.laserpowers]) + ' %')
-        if self.objective:
+        if self.objective and self.objective.model:
             s.append(f'objective:     {self.objective.model}')
         if self.magnification:
             s.append(f'magnification: {self.magnification}x')
-        if self.tubelens:
+        if self.tubelens and self.tubelens.model:
             s.append(f'tubelens:      {self.tubelens.model}')
         if self.filter:
             s.append(f'filterset:     {self.filter}')
@@ -815,14 +818,28 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         return [self.get_channel(c) for c in czt[0]], *czt[1:]
 
     @staticmethod
-    def get_ome(path):
+    def get_ome(path: [str, Path]) -> OME:
         """ Use java BioFormats to make an ome metadata structure. """
         with multiprocessing.get_context('spawn').Pool(1) as pool:
             ome = pool.map(get_ome, (path,))[0]
-            return ome
+
+        # fix ome if necessary
+        for image in ome.images:
+            try:
+                if image.pixels.physical_size_z is None and len(set([plane.the_z
+                                                                     for plane in image.pixels.planes])) > 1:
+                    z = np.array([(plane.position_z * ureg.Quantity(plane.position_z_unit.value).to(ureg.m).magnitude,
+                                   plane.the_z)
+                                  for plane in image.pixels.planes if plane.the_c == 0 and plane.the_t == 0])
+                    i = np.argsort(z[:, 1])
+                    image.pixels.physical_size_z = np.nanmean(np.true_divide(*np.diff(z[i], axis=0).T)) * 1e6
+                    image.pixels.physical_size_z_unit = 'µm'
+            except Exception:
+                pass
+        return ome
 
     @cached_property
-    def ome(self):
+    def ome(self) -> OME:
         return self.get_ome(self.path)
 
     def is_noise(self, volume=None):
@@ -945,10 +962,6 @@ class AbstractReader(Imread, metaclass=ABCMeta):
     @abstractmethod
     def __frame__(self, c, z, t):  # Override this, return the frame at c, z, t
         return np.random.randint(0, 255, self.shape['yx'])
-
-    @cached_property
-    def ome(self):
-        return self.get_ome(self.path)
 
     def open(self):  # Optionally override this, open file handles etc.
         """ filehandles cannot be pickled and should be marked such by setting do_not_pickle = 'file_handle_name' """
