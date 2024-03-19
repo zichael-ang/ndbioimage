@@ -913,7 +913,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
     def split_path_series(path):
         if isinstance(path, str):
             path = Path(path)
-        if isinstance(path, Path) and path.name.startswith('Pos'):
+        if isinstance(path, Path) and path.name.startswith('Pos') and path.name.lstrip('Pos').isdigit():
             return path.parent, int(path.name.lstrip('Pos'))
         return path, 0
 
