@@ -1,5 +1,4 @@
 from abc import ABC
-from functools import cached_property
 from itertools import product
 
 import numpy as np
@@ -15,8 +14,7 @@ class Reader(AbstractReader, ABC):
     def _can_open(path):
         return isinstance(path, np.ndarray) and 1 <= path.ndim <= 5
 
-    @cached_property
-    def ome(self):
+    def get_ome(self):
         def shape(size_x=1, size_y=1, size_c=1, size_z=1, size_t=1):  # noqa
             return size_x, size_y, size_c, size_z, size_t
         size_x, size_y, size_c, size_z, size_t = shape(*self.array.shape)
@@ -34,8 +32,8 @@ class Reader(AbstractReader, ABC):
             model.Image(
                 pixels=model.Pixels(
                     size_c=size_c, size_z=size_z, size_t=size_t, size_x=size_x, size_y=size_y,
-                    dimension_order="XYCZT", type=pixel_type),
-                objective_settings=model.ObjectiveSettings(id="Objective:0")))
+                    dimension_order='XYCZT', type=pixel_type),
+                objective_settings=model.ObjectiveSettings(id='Objective:0')))
         for c, z, t in product(range(size_c), range(size_z), range(size_t)):
             ome.images[0].pixels.planes.append(model.Plane(the_c=c, the_z=z, the_t=t, delta_t=0))
         return ome

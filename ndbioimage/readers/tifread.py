@@ -24,22 +24,21 @@ class Reader(AbstractReader, ABC):
             return False
 
     @cached_property
-    def ome(self):
-        metadata = {key: yaml.safe_load(value) if isinstance(value, str) else value
-                    for key, value in self.reader.imagej_metadata.items()}
+    def metadata(self):
+        return {key: yaml.safe_load(value) if isinstance(value, str) else value
+                for key, value in self.reader.imagej_metadata.items()}
 
+    def get_ome(self):
         page = self.reader.pages[0]
-        self.p_ndim = page.ndim  # noqa
         size_y = page.imagelength
         size_x = page.imagewidth
         if self.p_ndim == 3:
             size_c = page.samplesperpixel
-            self.p_transpose = [i for i in [page.axes.find(j) for j in 'SYX'] if i >= 0]  # noqa
-            size_t = metadata.get('frames', 1)  # // C
+            size_t = self.metadata.get('frames', 1)  # // C
         else:
-            size_c = metadata.get('channels', 1)
-            size_t = metadata.get('frames', 1)
-        size_z = metadata.get('slices', 1)
+            size_c = self.metadata.get('channels', 1)
+            size_t = self.metadata.get('frames', 1)
+        size_z = self.metadata.get('slices', 1)
         if 282 in page.tags and 296 in page.tags and page.tags[296].value == 1:
             f = page.tags[282].value
             pxsize = f[1] / f[0]
@@ -51,7 +50,7 @@ class Reader(AbstractReader, ABC):
                          'float', 'double', 'complex', 'double-complex', 'bit'):
             dtype = 'float'
 
-        interval_t = metadata.get('interval', 0)
+        interval_t = self.metadata.get('interval', 0)
 
         ome = model.OME()
         ome.instruments.append(model.Instrument(id='Instrument:0'))
@@ -62,14 +61,18 @@ class Reader(AbstractReader, ABC):
                 pixels=model.Pixels(
                     id='Pixels:0',
                     size_c=size_c, size_z=size_z, size_t=size_t, size_x=size_x, size_y=size_y,
-                    dimension_order="XYCZT", type=dtype, physical_size_x=pxsize, physical_size_y=pxsize),
-                objective_settings=model.ObjectiveSettings(id="Objective:0")))
+                    dimension_order='XYCZT', type=dtype, physical_size_x=pxsize, physical_size_y=pxsize),
+                objective_settings=model.ObjectiveSettings(id='Objective:0')))
         for c, z, t in product(range(size_c), range(size_z), range(size_t)):
             ome.images[0].pixels.planes.append(model.Plane(the_c=c, the_z=z, the_t=t, delta_t=interval_t * t))
         return ome
 
     def open(self):
         self.reader = tifffile.TiffFile(self.path)
+        page = self.reader.pages[0]
+        self.p_ndim = page.ndim  # noqa
+        if self.p_ndim == 3:
+            self.p_transpose = [i for i in [page.axes.find(j) for j in 'SYX'] if i >= 0]  # noqa
 
     def close(self):
         self.reader.close()

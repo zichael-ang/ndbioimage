@@ -1,5 +1,4 @@
 from abc import ABC
-from functools import cached_property
 from itertools import product
 from pathlib import Path
 from struct import unpack
@@ -32,8 +31,8 @@ class Reader(AbstractReader, ABC):
     def open(self):
         warn(f'File {self.path.name} is probably damaged, opening with fijiread.')
         self.reader = TiffFile(self.path)
-        assert self.reader.pages[0].compression == 1, "Can only read uncompressed tiff files."
-        assert self.reader.pages[0].samplesperpixel == 1, "Can only read 1 sample per pixel."
+        assert self.reader.pages[0].compression == 1, 'Can only read uncompressed tiff files.'
+        assert self.reader.pages[0].samplesperpixel == 1, 'Can only read 1 sample per pixel.'
         self.offset = self.reader.pages[0].dataoffsets[0]  # noqa
         self.count = self.reader.pages[0].databytecounts[0]  # noqa
         self.bytes_per_sample = self.reader.pages[0].bitspersample // 8  # noqa
@@ -42,8 +41,7 @@ class Reader(AbstractReader, ABC):
     def close(self):
         self.reader.close()
 
-    @cached_property
-    def ome(self):
+    def get_ome(self):
         size_y, size_x = self.reader.pages[0].shape
         size_c, size_z = 1, 1
         size_t = int(np.floor((self.reader.filehandle.size - self.reader.pages[0].dataoffsets[0]) / self.count))
@@ -54,8 +52,8 @@ class Reader(AbstractReader, ABC):
             model.Image(
                 pixels=model.Pixels(
                     size_c=size_c, size_z=size_z, size_t=size_t, size_x=size_x, size_y=size_y,
-                    dimension_order="XYCZT", type=pixel_type),
-                objective_settings=model.ObjectiveSettings(id="Objective:0")))
+                    dimension_order='XYCZT', type=pixel_type),
+                objective_settings=model.ObjectiveSettings(id='Objective:0')))
         for c, z, t in product(range(size_c), range(size_z), range(size_t)):
             ome.images[0].pixels.planes.append(model.Plane(the_c=c, the_z=z, the_t=t, delta_t=0))
         return ome

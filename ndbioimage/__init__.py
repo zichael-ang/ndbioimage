@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import multiprocessing
 import re
 import warnings
@@ -12,13 +14,14 @@ from numbers import Number
 from operator import truediv
 from pathlib import Path
 from traceback import print_exc
+from typing import Any, Callable, Mapping, Optional
 
 import numpy as np
 import ome_types
 import yaml
-from ome_types import model, ureg, OME
+from ome_types import OME, model, ureg
 from pint import set_application_registry
-from tiffwrite import IJTiffFile
+from tiffwrite import IFD, IJTiffFile
 from tqdm.auto import tqdm
 
 from .jvm import JVM
@@ -48,34 +51,34 @@ class ReaderNotFoundError(Exception):
 
 class TransformTiff(IJTiffFile):
     """ transform frames in a parallel process to speed up saving """
-    def __init__(self, image, *args, **kwargs):
+    def __init__(self, image: Imread, *args: Any, **kwargs: Any) -> None:
         self.image = image
         super().__init__(*args, **kwargs)
 
-    def compress_frame(self, frame):
+    def compress_frame(self, frame: tuple[int, int, int]) -> tuple[IFD, tuple[list[int], list[int]]]:
         return super().compress_frame(np.asarray(self.image(*frame)).astype(self.dtype))
 
 
 class DequeDict(OrderedDict):
-    def __init__(self, maxlen=None, *args, **kwargs):
+    def __init__(self, maxlen: int = None, *args: Any, **kwargs: Any) -> None:
         self.maxlen = maxlen
         super().__init__(*args, **kwargs)
 
-    def __truncate__(self):
+    def __truncate__(self) -> None:
         if self.maxlen is not None:
             while len(self) > self.maxlen:
                 self.popitem(False)
 
-    def __setitem__(self, *args, **kwargs):
+    def __setitem__(self, *args: Any, **kwargs: Any) -> None:
         super().__setitem__(*args, **kwargs)
         self.__truncate__()
 
-    def update(self, *args, **kwargs):
+    def update(self, *args: Any, **kwargs: Any) -> None:
         super().update(*args, **kwargs)
         self.__truncate__()
 
 
-def find(obj, **kwargs):
+def find(obj: Mapping, **kwargs: Any) -> Any:
     for item in obj:
         try:
             if all([getattr(item, key) == value for key, value in kwargs.items()]):
@@ -84,14 +87,14 @@ def find(obj, **kwargs):
             pass
 
 
-def try_default(fun, default, *args, **kwargs):
+def try_default(fun: Callable, default: Any, *args: Any, **kwargs: Any) -> Any:
     try:
         return fun(*args, **kwargs)
     except Exception:  # noqa
         return default
 
 
-def get_ome(path):
+def bioformats_ome(path: str | Path) -> OME:
     from .readers.bfread import jars
     try:
         jvm = JVM(jars)  # noqa
@@ -109,24 +112,70 @@ def get_ome(path):
 
 
 class Shape(tuple):
-    def __new__(cls, shape, axes='yxczt'):
+    def __new__(cls, shape: tuple[int] | Shape[int], axes: str = 'yxczt') -> Shape[int]:
         if isinstance(shape, Shape):
-            axes = shape.axes
+            axes = shape.axes  # type: ignore
         instance = super().__new__(cls, shape)
         instance.axes = axes.lower()
-        return instance
+        return instance  # type: ignore
 
-    def __getitem__(self, n):
+    def __getitem__(self, n: int | str) -> int | tuple[int]:
         if isinstance(n, str):
             if len(n) == 1:
                 return self[self.axes.find(n.lower())] if n.lower() in self.axes else 1
             else:
-                return tuple(self[i] for i in n)
+                return tuple(self[i] for i in n)  # type: ignore
         return super().__getitem__(n)
 
     @cached_property
-    def yxczt(self):
-        return tuple(self[i] for i in 'yxczt')
+    def yxczt(self) -> tuple[int, int, int, int, int]:
+        return tuple(self[i] for i in 'yxczt')  # type: ignore
+
+
+class CachedPath(Path):
+    """ helper class for checking whether a file has changed, used by OmeCache """
+
+    def __init__(self, path: Path | str) -> None:
+        super().__init__(path)
+        if self.exists():
+            self._lstat = super().lstat()  # save file metadata like creation time etc.
+        else:
+            self._lstat = None
+
+    def __eq__(self, other: Path | CachedPath) -> bool:
+        return super().__eq__(other) and self.lstat() == other.lstat()
+
+    def __hash__(self) -> int:
+        return hash((super().__hash__(), self.lstat()))
+
+    def lstat(self):
+        return self._lstat
+
+
+class OmeCache(DequeDict):
+    """ prevent (potentially expensive) rereading of ome data by caching """
+
+    instance = None
+
+    def __new__(cls) -> OmeCache:
+        if cls.instance is None:
+            cls.instance = super().__new__(cls)
+        return cls.instance
+
+    def __init__(self) -> None:
+        super().__init__(64)
+
+    def __reduce__(self) -> tuple[type, tuple]:
+        return self.__class__, ()
+
+    def __getitem__(self, item: Path | CachedPath) -> OME:
+        return super().__getitem__(CachedPath(item))
+
+    def __setitem__(self, key: Path | CachedPath, value: OME) -> None:
+        super().__setitem__(CachedPath(key), value)
+
+    def __contains__(self, item: Path | CachedPath) -> bool:
+        return super().__contains__(CachedPath(item))
 
 
 class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
@@ -246,7 +295,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
     def __getitem__(self, n):
         """ slice like a numpy array but return an Imread instance """
         if self.isclosed:
-            raise OSError("file is closed")
+            raise OSError('file is closed')
         if isinstance(n, (slice, Number)):  # None = :
             n = (n,)
         elif isinstance(n, type(Ellipsis)):
@@ -520,11 +569,11 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
     @property
     def summary(self):
         """ gives a helpful summary of the recorded experiment """
-        s = [f"path/filename: {self.path}",
-             f"series/pos:    {self.series}",
+        s = [f'path/filename: {self.path}',
+             f'series/pos:    {self.series}',
              f"reader:        {self.base.__class__.__module__.split('.')[-1]}"]
-        s.extend((f"dtype:         {self.dtype}",
-                  f"shape ({self.axes}):".ljust(15) + f"{' x '.join(str(i) for i in self.shape)}"))
+        s.extend((f'dtype:         {self.dtype}',
+                  f'shape ({self.axes}):'.ljust(15) + f"{' x '.join(str(i) for i in self.shape)}"))
         if self.pxsize_um:
             s.append(f'pixel size:    {1000 * self.pxsize_um:.2f} nm')
         if self.zstack and self.deltaz_um:
@@ -818,11 +867,13 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         return [self.get_channel(c) for c in czt[0]], *czt[1:]
 
     @staticmethod
-    def get_ome(path: [str, Path]) -> OME:
+    def bioformats_ome(path: [str, Path]) -> OME:
         """ Use java BioFormats to make an ome metadata structure. """
         with multiprocessing.get_context('spawn').Pool(1) as pool:
-            ome = pool.map(get_ome, (path,))[0]
+            return pool.map(bioformats_ome, (path,))[0]
 
+    @staticmethod
+    def fix_ome(ome: OME) -> OME:
         # fix ome if necessary
         for image in ome.images:
             try:
@@ -838,9 +889,25 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 pass
         return ome
 
+    @staticmethod
+    def read_ome(path: [str, Path]) -> Optional[OME]:
+        path = Path(path)
+        if path.with_suffix('.ome.xml').exists():
+            return OME.from_xml(path.with_suffix('.ome.xml'))
+
+    def get_ome(self) -> OME:
+        """ overload this """
+        return self.bioformats_ome(self.path)
+
     @cached_property
     def ome(self) -> OME:
-        return self.get_ome(self.path)
+        cache = OmeCache()
+        if self.path not in cache:
+            ome = self.read_ome(self.path)
+            if ome is None:
+                ome = self.get_ome()
+            cache[self.path] = self.fix_ome(ome)
+        return cache[self.path]
 
     def is_noise(self, volume=None):
         """ True if volume only has noise """
@@ -885,7 +952,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
 
             shape = [len(i) for i in n]
             with TransformTiff(self, fname.with_suffix('.tif'), shape, pixel_type,
-                            pxsize=self.pxsize_um, deltaz=self.deltaz_um, **kwargs) as tif:
+                               pxsize=self.pxsize_um, deltaz=self.deltaz_um, **kwargs) as tif:
                 for i, m in tqdm(zip(product(*[range(s) for s in shape]), product(*n)),  # noqa
                                  total=np.prod(shape), desc='Saving tiff', disable=not bar):
                     tif.save(m, *i)
@@ -1000,7 +1067,7 @@ class AbstractReader(Imread, metaclass=ABCMeta):
         self.open()
         # extract some metadata from ome
         instrument = self.ome.instruments[0] if self.ome.instruments else None
-        image = self.ome.images[self.series]
+        image = self.ome.images[self.series if len(self.ome.images) > 1 else 0]
         pixels = image.pixels
         self.shape = pixels.size_y, pixels.size_x, pixels.size_c, pixels.size_z, pixels.size_t
         self.dtype = pixels.type.value if dtype is None else dtype
@@ -1016,8 +1083,8 @@ class AbstractReader(Imread, metaclass=ABCMeta):
             self.deltaz_um = None if self.deltaz is None else self.deltaz.to(self.ureg.um).m
         else:
             self.deltaz = self.deltaz_um = None
-        if self.ome.images[self.series].objective_settings:
-            self.objective = find(instrument.objectives, id=self.ome.images[self.series].objective_settings.id)
+        if image.objective_settings:
+            self.objective = find(instrument.objectives, id=image.objective_settings.id)
         else:
             self.objective = None
         try:
@@ -1130,6 +1197,7 @@ def main():
     parser = ArgumentParser(description='Display info and save as tif')
     parser.add_argument('file', help='image_file')
     parser.add_argument('out', help='path to tif out', type=str, default=None, nargs='?')
+    parser.add_argument('-o', '--extract_ome', help='extract ome to xml file', action='store_true')
     parser.add_argument('-r', '--register', help='register channels', action='store_true')
     parser.add_argument('-c', '--channel', help='channel', type=int, default=None)
     parser.add_argument('-z', '--zslice', help='z-slice', type=int, default=None)
@@ -1149,6 +1217,9 @@ def main():
                 print(f'File {args.out} exists already, add the -f flag if you want to overwrite it.')
             else:
                 im.save_as_tiff(out, args.channel, args.zslice, args.time, args.split)
+        if args.extract_ome:
+            with open(im.path.with_suffix('.ome.xml'), 'w') as f:
+                f.write(im.ome.to_xml())
 
 
 from .readers import *

@@ -2,6 +2,7 @@ from itertools import product
 
 import numpy as np
 import pytest
+
 from ndbioimage import Imread
 
 r = np.random.randint(0, 255, (64, 64, 2, 3, 4))

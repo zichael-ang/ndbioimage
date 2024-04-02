@@ -88,7 +88,7 @@ class Transforms(dict):
         return hash(frozenset((*self.__dict__.items(), *self.items())))
 
     def save(self, file):
-        with open(Path(file).with_suffix(".yml"), 'w') as f:
+        with open(Path(file).with_suffix('.yml'), 'w') as f:
             yaml.safe_dump(self.asdict(), f, default_flow_style=None)
 
     def copy(self):
@@ -136,7 +136,7 @@ class Transforms(dict):
             raise TypeError('Not a pandas DataFrame or Series.')
 
     def with_beads(self, cyllens, bead_files):
-        assert len(bead_files) > 0, "At least one file is needed to calculate the registration."
+        assert len(bead_files) > 0, 'At least one file is needed to calculate the registration.'
         transforms = [self.calculate_channel_transforms(file, cyllens) for file in bead_files]
         for key in {key for transform in transforms for key in transform.keys()}:
             new_transforms = [transform[key] for transform in transforms if key in transform]
