@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import multiprocessing
 import re
+import os
 import warnings
 from abc import ABC, ABCMeta, abstractmethod
 from argparse import ArgumentParser
@@ -12,7 +13,7 @@ from importlib.metadata import version
 from itertools import product
 from numbers import Number
 from operator import truediv
-from pathlib import Path
+from pathlib import Path, PosixPath, WindowsPath, PurePath
 from traceback import print_exc
 from typing import Any, Callable, Mapping, Optional
 
@@ -132,7 +133,7 @@ class Shape(tuple):
         return tuple(self[i] for i in 'yxczt')  # type: ignore
 
 
-class CachedPath(type(Path())):
+class CachedPath(WindowsPath if os.name == 'nt' else PosixPath):
     """ helper class for checking whether a file has changed, used by OmeCache """
 
     def __init__(self, path: Path | str) -> None:
