@@ -132,7 +132,7 @@ class Shape(tuple):
         return tuple(self[i] for i in 'yxczt')  # type: ignore
 
 
-class CachedPath(Path):
+class CachedPath(type(Path())):
     """ helper class for checking whether a file has changed, used by OmeCache """
 
     def __init__(self, path: Path | str) -> None:
