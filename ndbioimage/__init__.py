@@ -133,26 +133,6 @@ class Shape(tuple):
         return tuple(self[i] for i in 'yxczt')  # type: ignore
 
 
-class CachedPath(WindowsPath if os.name == 'nt' else PosixPath):
-    """ helper class for checking whether a file has changed, used by OmeCache """
-
-    def __init__(self, path: Path | str) -> None:
-        super().__init__(path)
-        if self.exists():
-            self._lstat = super().lstat()  # save file metadata like creation time etc.
-        else:
-            self._lstat = None
-
-    def __eq__(self, other: Path | CachedPath) -> bool:
-        return super().__eq__(other) and self.lstat() == other.lstat()
-
-    def __hash__(self) -> int:
-        return hash((super().__hash__(), self.lstat()))
-
-    def lstat(self):
-        return self._lstat
-
-
 class OmeCache(DequeDict):
     """ prevent (potentially expensive) rereading of ome data by caching """
 
@@ -169,14 +149,19 @@ class OmeCache(DequeDict):
     def __reduce__(self) -> tuple[type, tuple]:
         return self.__class__, ()
 
-    def __getitem__(self, item: Path | CachedPath) -> OME:
-        return super().__getitem__(CachedPath(item))
+    def __getitem__(self, path: Path) -> OME:
+        return super().__getitem__(self.path_and_lstat(path))
 
-    def __setitem__(self, key: Path | CachedPath, value: OME) -> None:
-        super().__setitem__(CachedPath(key), value)
+    def __setitem__(self, path: Path, value: OME) -> None:
+        super().__setitem__(self.path_and_lstat(path), value)
 
-    def __contains__(self, item: Path | CachedPath) -> bool:
-        return super().__contains__(CachedPath(item))
+    def __contains__(self, path: Path) -> bool:
+        return super().__contains__(self.path_and_lstat(path))
+
+    @staticmethod
+    def path_and_lstat(path: str | Path) -> tuple[Path, Optional[os.stat_result]]:
+        path = Path(path)
+        return path, (path.lstat() if path.exists() else None)
 
 
 class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
