@@ -159,9 +159,10 @@ class OmeCache(DequeDict):
         return super().__contains__(self.path_and_lstat(path))
 
     @staticmethod
-    def path_and_lstat(path: str | Path) -> tuple[Path, Optional[os.stat_result]]:
+    def path_and_lstat(path: str | Path) -> tuple[Path, Optional[os.stat_result], Optional[os.stat_result]]:
         path = Path(path)
-        return path, (path.lstat() if path.exists() else None)
+        return (path, (path.lstat() if path.exists() else None),
+                (path.with_suffix('.ome.xml').lstat() if path.with_suffix('.ome.xml').exists() else None))
 
 
 class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):

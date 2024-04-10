@@ -24,7 +24,7 @@ pip install ndbioimage
 ```
 import matplotlib.pyplot as plt
 from ndbioimage import Imread
-with Imread('image_file.tif', axes='ctxy', dtype=int) as im:
+with Imread('image_file.tif', axes='ctyx', dtype=int) as im:
     plt.imshow(im[2, 1])
 ```        
         
@@ -41,7 +41,7 @@ with Imread('image_file.tif') as im:
 
 ```
 from ndbioimage import Imread
-with Imread('image_file.tif', axes='cztxy') as im:
+with Imread('image_file.tif', axes='cztyx') as im:
     sliced_im = im[1, :, :, 100:200, 100:200]
 ```
 
@@ -53,7 +53,7 @@ sliced_im is an instance of Imread which will load any image data from file only
 ```
 from ndbioimage import Imread
 import numpy as np
-with Imread('image_file.tif', axes='cztxy') as im:
+with Imread('image_file.tif', axes='cztyx') as im:
     array = np.asarray(im[0, 0])
 ```
 
