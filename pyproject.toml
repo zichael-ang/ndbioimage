@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ndbioimage"
-version = "2024.4.5"
+version = "2024.4.6"
 description = "Bio image reading, metadata and some affine registration."
 authors = ["W. Pomp <w.pomp@nki.nl>"]
 license = "GPLv3"
@@ -11,7 +11,7 @@ repository = "https://github.com/wimpomp/ndbioimage"
 exclude = ["ndbioimage/jars"]
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.10"
 numpy = "*"
 pandas = "*"
 tifffile = "*"
@@ -35,7 +35,7 @@ xsdata = "^23"  # until pydantic is up-to-date
 pytest = { version = "*", optional = true }
 
 [tool.poetry.extras]
-test = ["pytest-xdist"]
+test = ["pytest"]
 
 [tool.poetry.scripts]
 ndbioimage = "ndbioimage:main"
