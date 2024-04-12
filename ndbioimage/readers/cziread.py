@@ -4,12 +4,13 @@ from abc import ABC
 from io import BytesIO
 from itertools import product
 from pathlib import Path
+from typing import Any, TypeVar, Optional
 
 import czifile
 import imagecodecs
 import numpy as np
 from lxml import etree
-from ome_types import model
+from ome_types import model, OME
 from tifffile import repeat_nd
 
 from .. import AbstractReader
@@ -24,9 +25,12 @@ except ImportError:
         zoom = None
 
 
-def zstd_decode(data: bytes) -> bytes:
+Element = TypeVar('Element')
+
+
+def zstd_decode(data: bytes) -> bytes:  # noqa
     """ decode zstd bytes, copied from BioFormats ZeissCZIReader """
-    def read_var_int(stream: BytesIO) -> int:
+    def read_var_int(stream: BytesIO) -> int:  # noqa
         a = stream.read(1)[0]
         if a & 128:
             b = stream.read(1)[0]
@@ -48,7 +52,7 @@ def zstd_decode(data: bytes) -> bytes:
                 else:
                     raise ValueError(f'Invalid chunk id: {chunk_id}')
             pointer = stream.tell()
-    except Exception:
+    except Exception:  # noqa
         high_low_unpacking = False
         pointer = 0
 
@@ -60,9 +64,9 @@ def zstd_decode(data: bytes) -> bytes:
         return decoded
 
 
-def data(self, raw=False, resize=True, order=0):
+def data(self, raw: bool = False, resize: bool = True, order: int = 0) -> np.ndarray:
     """Read image data from file and return as numpy array."""
-    DECOMPRESS = czifile.czifile.DECOMPRESS
+    DECOMPRESS = czifile.czifile.DECOMPRESS  # noqa
     DECOMPRESS[5] = imagecodecs.zstd_decode
     DECOMPRESS[6] = zstd_decode
 
@@ -71,32 +75,32 @@ def data(self, raw=False, resize=True, order=0):
     if raw:
         with fh.lock:
             fh.seek(self.data_offset)
-            data = fh.read(self.data_size)
+            data = fh.read(self.data_size)  # noqa
         return data
     if de.compression:
         # if de.compression not in DECOMPRESS:
         #     raise ValueError('compression unknown or not supported')
         with fh.lock:
             fh.seek(self.data_offset)
-            data = fh.read(self.data_size)
-        data = DECOMPRESS[de.compression](data)
+            data = fh.read(self.data_size)  # noqa
+        data = DECOMPRESS[de.compression](data)  # noqa
         if de.compression == 2:
             # LZW
             data = np.fromstring(data, de.dtype)  # noqa
         elif de.compression in (5, 6):
             # ZSTD
-            data = np.frombuffer(data, de.dtype)
+            data = np.frombuffer(data, de.dtype)  # noqa
     else:
         dtype = np.dtype(de.dtype)
         with fh.lock:
             fh.seek(self.data_offset)
-            data = fh.read_array(dtype, self.data_size // dtype.itemsize)
+            data = fh.read_array(dtype, self.data_size // dtype.itemsize)  # noqa
 
-    data = data.reshape(de.stored_shape)
+    data = data.reshape(de.stored_shape)  # noqa
     if de.compression != 4 and de.stored_shape[-1] in (3, 4):
         if de.stored_shape[-1] == 3:
             # BGR -> RGB
-            data = data[..., ::-1]
+            data = data[..., ::-1]  # noqa
         else:
             # BGRA -> RGBA
             tmp = data[..., 0].copy()
@@ -112,7 +116,7 @@ def data(self, raw=False, resize=True, order=0):
 
     # use repeat if possible
     if order == 0 and all(isinstance(f, int) for f in factors):
-        data = repeat_nd(data, factors).copy()
+        data = repeat_nd(data, factors).copy()  # noqa
         data.shape = de.shape
         return data
 
@@ -133,11 +137,11 @@ def data(self, raw=False, resize=True, order=0):
     if shape[-1] in (3, 4) and factors[-1] == 1.0:
         factors = factors[:-1]
         old = data
-        data = np.empty(de.shape, de.dtype[-2:])
+        data = np.empty(de.shape, de.dtype[-2:])  # noqa
         for i in range(shape[-1]):
             data[..., i] = zoom(old[..., i], zoom=factors, order=order)
     else:
-        data = zoom(data, zoom=factors, order=order)
+        data = zoom(data, zoom=factors, order=order)  # noqa
 
     data.shape = de.shape
     return data
@@ -152,10 +156,10 @@ class Reader(AbstractReader, ABC):
     do_not_pickle = 'reader', 'filedict'
 
     @staticmethod
-    def _can_open(path):
+    def _can_open(path: Path) -> bool:
         return isinstance(path, Path) and path.suffix == '.czi'
 
-    def open(self):
+    def open(self) -> None:
         self.reader = czifile.CziFile(self.path)
         filedict = {}
         for directory_entry in self.reader.filtered_subblock_directory:
@@ -170,10 +174,10 @@ class Reader(AbstractReader, ABC):
                                 filedict[c, z, t] = [directory_entry]
         self.filedict = filedict  # noqa
 
-    def close(self):
+    def close(self) -> None:
         self.reader.close()
 
-    def get_ome(self):
+    def get_ome(self) -> OME:
         xml = self.reader.metadata()
         attachments = {i.attachment_entry.name: i.attachment_entry.data_segment()
                        for i in self.reader.attachments()}
@@ -190,14 +194,14 @@ class Reader(AbstractReader, ABC):
         elif version == '1.2':
             return self.ome_12(tree, attachments)
 
-    def ome_12(self, tree, attachments):
-        def text(item, default=""):
+    def ome_12(self, tree: etree, attachments: dict[str, Any]) -> OME:
+        def text(item: Optional[Element], default: str = "") -> str:
             return default if item is None else item.text
 
-        def def_list(item):
+        def def_list(item: Any) -> list[Any]:
             return [] if item is None else item
 
-        ome = model.OME()
+        ome = OME()
 
         metadata = tree.find('Metadata')
 
@@ -235,7 +239,7 @@ class Reader(AbstractReader, ABC):
             try:
                 nominal_magnification = float(re.findall(r'\d+(?:[,.]\d*)?',
                                                          tubelens.attrib['Name'])[0].replace(',', '.'))
-            except Exception:
+            except Exception:  # noqa
                 nominal_magnification = 1.0
 
             ome.instruments[0].objectives.append(
@@ -376,14 +380,14 @@ class Reader(AbstractReader, ABC):
                 idx += 1
         return ome
 
-    def ome_10(self, tree, attachments):
-        def text(item, default=""):
+    def ome_10(self, tree: etree, attachments: dict[str, Any]) -> OME:
+        def text(item: Optional[Element], default: str = "") -> str:
             return default if item is None else item.text
 
-        def def_list(item):
+        def def_list(item: Any) -> list[Any]:
             return [] if item is None else item
 
-        ome = model.OME()
+        ome = OME()
 
         metadata = tree.find('Metadata')
 
@@ -580,7 +584,7 @@ class Reader(AbstractReader, ABC):
                 idx += 1
         return ome
 
-    def __frame__(self, c=0, z=0, t=0):
+    def __frame__(self, c: int = 0, z: int = 0, t: int = 0) -> np.ndarray:
         f = np.zeros(self.base.shape['yx'], self.dtype)
         if (c, z, t) in self.filedict:
             directory_entries = self.filedict[c, z, t]
@@ -598,5 +602,5 @@ class Reader(AbstractReader, ABC):
         return f
 
     @staticmethod
-    def get_index(directory_entry, start):
+    def get_index(directory_entry: czifile.DirectoryEntryDV, start: tuple[int]) -> list[tuple[int, int]]:
         return [(i - j, i - j + k) for i, j, k in zip(directory_entry.start, start, directory_entry.shape)]

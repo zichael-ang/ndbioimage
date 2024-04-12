@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import multiprocessing
-import re
 import os
+import re
 import warnings
 from abc import ABC, ABCMeta, abstractmethod
 from argparse import ArgumentParser
@@ -11,18 +11,17 @@ from datetime import datetime
 from functools import cached_property, wraps
 from importlib.metadata import version
 from itertools import product
-from numbers import Number
 from operator import truediv
-from pathlib import Path, PosixPath, WindowsPath, PurePath
+from pathlib import Path
 from traceback import print_exc
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Generator, Iterable, Optional, Sequence, TypeVar
 
 import numpy as np
-import ome_types
 import yaml
-from ome_types import OME, model, ureg
+from numpy.typing import ArrayLike, DTypeLike
+from ome_types import OME, from_xml, model, ureg
 from pint import set_application_registry
-from tiffwrite import IFD, IJTiffFile
+from tiffwrite import IFD, IJTiffFile  # noqa
 from tqdm.auto import tqdm
 
 from .jvm import JVM
@@ -44,6 +43,7 @@ except Exception:  # noqa
 ureg.default_format = '~P'
 set_application_registry(ureg)
 warnings.filterwarnings('ignore', 'Reference to unknown ID')
+Number = int | float | np.integer | np.floating
 
 
 class ReaderNotFoundError(Exception):
@@ -79,7 +79,7 @@ class DequeDict(OrderedDict):
         self.__truncate__()
 
 
-def find(obj: Mapping, **kwargs: Any) -> Any:
+def find(obj: Sequence[Any], **kwargs: Any) -> Any:
     for item in obj:
         try:
             if all([getattr(item, key) == value for key, value in kwargs.items()]):
@@ -88,7 +88,10 @@ def find(obj: Mapping, **kwargs: Any) -> Any:
             pass
 
 
-def try_default(fun: Callable, default: Any, *args: Any, **kwargs: Any) -> Any:
+R = TypeVar('R')
+
+
+def try_default(fun: Callable[..., R], default: Any, *args: Any, **kwargs: Any) -> R:
     try:
         return fun(*args, **kwargs)
     except Exception:  # noqa
@@ -103,7 +106,7 @@ def bioformats_ome(path: str | Path) -> OME:
         reader = jvm.image_reader()
         reader.setMetadataStore(ome_meta)
         reader.setId(str(path))
-        ome = ome_types.from_xml(str(ome_meta.dumpXML()), parser='lxml')
+        ome = from_xml(str(ome_meta.dumpXML()), parser='lxml')
     except Exception:  # noqa
         print_exc()
         ome = model.OME()
@@ -113,12 +116,12 @@ def bioformats_ome(path: str | Path) -> OME:
 
 
 class Shape(tuple):
-    def __new__(cls, shape: tuple[int] | Shape[int], axes: str = 'yxczt') -> Shape[int]:
+    def __new__(cls, shape: Sequence[int] | Shape, axes: str = 'yxczt') -> Shape:
         if isinstance(shape, Shape):
             axes = shape.axes  # type: ignore
-        instance = super().__new__(cls, shape)
-        instance.axes = axes.lower()
-        return instance  # type: ignore
+        new = super().__new__(cls, shape)
+        new.axes = axes.lower()
+        return new  # type: ignore
 
     def __getitem__(self, n: int | str) -> int | tuple[int]:
         if isinstance(n, str):
@@ -170,11 +173,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         currently optimized for .czi files, but can open anything that bioformats can handle
             path: path to the image file
             optional:
-            series: in case multiple experiments are saved in one file, like in .lif files
+            axes: order of axes, default: cztyx, but omitting any axes with lenght 1
             dtype: datatype to be used when returning frames
-            meta: define metadata, used for pickle-ing
-
-            NOTE: run imread.kill_vm() at the end of your script/program, otherwise python might not terminate
 
             modify images on the fly with a decorator function:
                 define a function which takes an instance of this object, one image frame,
@@ -183,21 +183,18 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 then use imread as usually
 
             Examples:
-                >> im = imread('/DATA/lenstra_lab/w.pomp/data/20190913/01_YTL639_JF646_DefiniteFocus.czi')
+                >> im = Imread('/path/to/file.image', axes='czt)
                 >> im
                  << shows summary
                 >> im.shape
-                 << (256, 256, 2, 1, 600)
-                >> plt.imshow(im(1, 0, 100))
-                 << plots frame at position c=1, z=0, t=100 (python type indexing), note: round brackets; always 2d array
-                    with 1 frame
-                >> data = im[:,:,0,0,:25]
-                 << retrieves 5d numpy array containing first 25 frames at c=0, z=0, note: square brackets; always 5d array
-                >> plt.imshow(im.max(0, None, 0))
-                 << plots max-z projection at c=0, t=0
-                >> len(im)
-                 << total number of frames
-                >> im.pxsize
+                 << (15, 26, 1000, 1000)
+                >> im.axes
+                 << 'ztyx'
+                >> plt.imshow(im[1, 0])
+                 << plots frame at position z=1, t=0 (python type indexing)
+                >> plt.imshow(im[:, 0].max('z'))
+                 << plots max-z projection at t=0
+                >> im.pxsize_um
                  << 0.09708737864077668 image-plane pixel size in um
                 >> im.laserwavelengths
                  << [642, 488]
@@ -210,15 +207,37 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 Subclass AbstractReader to add more file types. A subclass should always have at least the following
                 methods:
                     staticmethod _can_open(path): returns True when the subclass can open the image in path
-                    __metadata__(self): pulls some metadata from the file and do other format specific things,
-                                        it needs to define a few properties, like shape, etc.
                     __frame__(self, c, z, t): this should return a single frame at channel c, slice z and time t
+                    optional open(self): code to be run during initialization, e.g. to open a file handle
                     optional close(self): close the file in a proper way
-                    optional field priority: subclasses with lower priority will be tried first, default = 99
+                    optional class field priority: subclasses with lower priority will be tried first, default = 99
+                    optional get_ome(self) -> OME: return an OME structure with metadata,
+                        if not present bioformats will be used to generate an OME
                     Any other method can be overridden as needed
-            wp@tl2019-2023 """
+    """
 
-    def __new__(cls, path=None, *args, **kwargs):
+    isclosed: Optional[bool]
+    channel_names: Optional[list[str]]
+    series: Optional[int]
+    pxsize_um: Optional[float]
+    deltaz_um: Optional[float]
+    exposuretime_s: Optional[list[float]]
+    timeinterval: Optional[float]
+    binning: Optional[list[int]]
+    laserwavelengths: Optional[list[tuple[float]]]
+    laserpowers: Optional[list[tuple[float]]]
+    objective: Optional[model.Objective]
+    magnification: Optional[float]
+    tubelens: Optional[model.Objective]
+    filter: Optional[str]
+    powermode: Optional[str]
+    collimator: Optional[str]
+    tirfangle: Optional[list[float]]
+    gain: Optional[list[float]]
+    pcf: Optional[list[float]]
+    __frame__: Callable[[int, int, int], np.ndarray]
+
+    def __new__(cls, path: Path | str | Imread | Any = None, dtype: DTypeLike = None, axes: str = None) -> Imread:
         if cls is not Imread:
             return super().__new__(cls)
         if len(AbstractReader.__subclasses__()) == 0:
@@ -227,7 +246,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             return path
         path, _ = AbstractReader.split_path_series(path)
         for subclass in sorted(AbstractReader.__subclasses__(), key=lambda subclass_: subclass_.priority):
-            if subclass._can_open(path):
+            if subclass._can_open(path):  # noqa
                 do_not_pickle = (AbstractReader.do_not_pickle,) if isinstance(AbstractReader.do_not_pickle, str) \
                     else AbstractReader.do_not_pickle
                 subclass_do_not_pickle = (subclass.do_not_pickle,) if isinstance(subclass.do_not_pickle, str) \
@@ -237,7 +256,11 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 return super().__new__(subclass)
         raise ReaderNotFoundError(f'No reader found for {path}.')
 
-    def __init__(self, base=None, slice=None, shape=(0, 0, 0, 0, 0), dtype=None, frame_decorator=None):
+    def __init__(self, base: Imread = None,
+                 slice: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] = None,  # noqa
+                 shape: tuple[int, ...] = (0, 0, 0, 0, 0),
+                 dtype: DTypeLike = None,
+                 frame_decorator: Callable[[Imread, np.ndarray, int, int, int], np.ndarray] = None) -> None:
         self.base = base or self
         self.slice = slice
         self._shape = Shape(shape)
@@ -247,15 +270,15 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         self.flags = dict(C_CONTIGUOUS=False, F_CONTIGUOUS=False, OWNDATA=False, WRITEABLE=False,
                           ALIGNED=False, WRITEBACKIFCOPY=False, UPDATEIFCOPY=False)
 
-    def __call__(self, c=None, z=None, t=None, x=None, y=None):
+    def __call__(self, c: int = None, z: int = None, t: int = None, x: int = None, y: int = None) -> np.ndarray:
         """ same as im[] but allowing keyword axes, but slices need to made with slice() or np.s_ """
         return self[{k: slice(v) if v is None else v for k, v in dict(c=c, z=z, t=t, x=x, y=y).items()}]
 
-    def __copy__(self):
+    def __copy__(self) -> Imread:
         return self.copy()
 
-    def __contains__(self, item):
-        def unique_yield(a, b):
+    def __contains__(self, item: Number) -> bool:
+        def unique_yield(a: Iterable[Any], b: Iterable[Any]) -> Generator[Any, None, None]:
             for k in a:
                 yield k
             for k in b:
@@ -270,16 +293,17 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 return True
         return False
 
-    def __enter__(self):
+    def __enter__(self) -> Imread:
         return self
 
-    def __exit__(self, *args, **kwargs):
+    def __exit__(self, *args: Any, **kwargs: Any) -> None:
         if not self.isclosed:
             self.isclosed = True
             if hasattr(self, 'close'):
                 self.close()
 
-    def __getitem__(self, n):
+    def __getitem__(self, n: int | Sequence[int] | slice | type(Ellipsis) |
+                    dict[str, int | Sequence[int] | slice | type(Ellipsis)]) -> Number | Imread | np.ndarray:
         """ slice like a numpy array but return an Imread instance """
         if self.isclosed:
             raise OSError('file is closed')
@@ -326,26 +350,26 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                                                              if not isinstance(s, Number)])
             return new
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict[str: Any]:
         return {key: value for key, value in self.__dict__.items() if key not in self.do_not_pickle}
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.shape[0]
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.summary
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict[str, Any]) -> None:
         """ What happens during unpickling """
         self.__dict__.update(state)
         if isinstance(self, AbstractReader):
             self.open()
         self.cache = DequeDict(16)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return str(self.path)
 
-    def __array__(self, dtype=None):
+    def __array__(self, dtype: DTypeLike = None) -> np.ndarray:
         block = self.block(*self.slice)
         axes_idx = [self.shape.axes.find(i) for i in 'yxczt']
         axes_squeeze = tuple({i for i, j in enumerate(axes_idx) if j == -1}.union(
@@ -358,7 +382,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         axes = ''.join(j for i, j in enumerate('yxczt') if i not in axes_squeeze)
         return block.transpose([axes.find(i) for i in self.shape.axes if i in axes])
 
-    def __array_arg_fun__(self, fun, axis=None, out=None):
+    def __array_arg_fun__(self, fun: Callable[[ArrayLike, Optional[int]], Number | np.ndarray],
+                          axis: int | str = None, out: np.ndarray = None) -> Number | np.ndarray:
         """ frame-wise application of np.argmin and np.argmax """
         if axis is None:
             value = arg = None
@@ -366,13 +391,13 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 yxczt = (slice(None), slice(None)) + idx
                 in_idx = tuple(yxczt['yxczt'.find(i)] for i in self.axes)
                 new = np.asarray(self[in_idx])
-                new_arg = np.unravel_index(fun(new), new.shape)
+                new_arg = np.unravel_index(fun(new), new.shape)  # type: ignore
                 new_value = new[new_arg]
                 if value is None:
                     arg = new_arg + idx
                     value = new_value
                 else:
-                    i = fun((value, new_value))
+                    i = fun((value, new_value))  # type: ignore
                     arg = (arg, new_arg + idx)[i]
                     value = (value, new_value)[i]
             axes = ''.join(i for i in self.axes if i in 'yx') + 'czt'
@@ -420,8 +445,11 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                         out[out_idx] = np.where(i, new_arg, out[out_idx])
             return out
 
-    def __array_fun__(self, funs, axis=None, dtype=None, out=None, keepdims=False, initials=None, where=True,
-                      ffuns=None, cfun=None):
+    def __array_fun__(self, funs: Sequence[Callable[[ArrayLike], Number | np.ndarray]], axis: int | str = None,
+                      dtype: DTypeLike = None, out: np.ndarray = None, keepdims: bool = False,
+                      initials: list[Number | np.ndarray] = None, where: bool | int | np.ndarray = True,
+                      ffuns: Sequence[Callable[[ArrayLike], np.ndarray]] = None,
+                      cfun: Callable[..., np.ndarray] = None) -> Number | np.ndarray:
         """ frame-wise application of np.min, np.max, np.sum, np.mean and their nan equivalents """
         p = re.compile(r'\d')
         dtype = self.dtype if dtype is None else np.dtype(dtype)
@@ -430,11 +458,11 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         if ffuns is None:
             ffuns = [None for _ in funs]
 
-        def ffun_(frame):
+        def ffun_(frame: ArrayLike) -> np.ndarray:
             return np.asarray(frame)
         ffuns = [ffun_ if ffun is None else ffun for ffun in ffuns]
         if cfun is None:
-            def cfun(*res):
+            def cfun(*res):  # noqa
                 return res[0]
 
         # TODO: smarter transforms
@@ -501,26 +529,26 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             return out
 
     @property
-    def axes(self):
+    def axes(self) -> str:
         return self.shape.axes
 
     @axes.setter
-    def axes(self, value):
+    def axes(self, value: str) -> None:
         shape = self.shape[value]
         if isinstance(shape, Number):
             shape = (shape,)
         self._shape = Shape(shape, value)
 
     @property
-    def dtype(self):
+    def dtype(self) -> np.dtype:
         return self._dtype
 
     @dtype.setter
-    def dtype(self, value):
+    def dtype(self, value: DTypeLike) -> None:
         self._dtype = np.dtype(value)
 
     @cached_property
-    def extrametadata(self):
+    def extrametadata(self) -> Optional[Any]:
         if isinstance(self.path, Path):
             if self.path.with_suffix('.pzl2').exists():
                 pname = self.path.with_suffix('.pzl2')
@@ -535,26 +563,26 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         return
 
     @property
-    def ndim(self):
+    def ndim(self) -> int:
         return len(self.shape)
 
     @property
-    def size(self):
+    def size(self) -> int:
         return np.prod(self.shape)
 
     @property
-    def shape(self):
+    def shape(self) -> Shape:
         return self._shape
 
     @shape.setter
-    def shape(self, value):
+    def shape(self, value: Shape | tuple[int, ...]) -> None:
         if isinstance(value, Shape):
             self._shape = value
         else:
-            self._shape = Shape((value['yxczt'.find(i.lower())] for i in self.axes), self.axes)
+            self._shape = Shape([value['yxczt'.find(i.lower())] for i in self.axes], self.axes)
 
     @property
-    def summary(self):
+    def summary(self) -> str:
         """ gives a helpful summary of the recorded experiment """
         s = [f'path/filename: {self.path}',
              f'series/pos:    {self.series}',
@@ -598,44 +626,44 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         return '\n'.join(s)
 
     @property
-    def T(self):
+    def T(self) -> Imread:  # noqa
         return self.transpose()
 
     @cached_property
-    def timeseries(self):
+    def timeseries(self) -> bool:
         return self.shape['t'] > 1
 
     @cached_property
-    def zstack(self):
+    def zstack(self) -> bool:
         return self.shape['z'] > 1
 
-    @wraps(np.argmax)
+    @wraps(np.ndarray.argmax)
     def argmax(self, *args, **kwargs):
         return self.__array_arg_fun__(np.argmax, *args, **kwargs)
 
-    @wraps(np.argmin)
+    @wraps(np.ndarray.argmin)
     def argmin(self, *args, **kwargs):
         return self.__array_arg_fun__(np.argmin, *args, **kwargs)
 
-    @wraps(np.max)
-    def max(self, axis=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+    @wraps(np.ndarray.max)
+    def max(self, axis=None, out=None, keepdims=False, initial=None, where=True, **_):
         return self.__array_fun__([np.max], axis, None, out, keepdims, [initial], where)
 
-    @wraps(np.mean)
-    def mean(self, axis=None, dtype=None, out=None, keepdims=False, *, where=True, **kwargs):
+    @wraps(np.ndarray.mean)
+    def mean(self, axis=None, dtype=None, out=None, keepdims=False, *, where=True, **_):
         dtype = dtype or float
         n = np.prod(self.shape) if axis is None else self.shape[axis]
 
-        def sfun(frame):
+        def sfun(frame: ArrayLike) -> np.ndarray:
             return np.asarray(frame).astype(float)
 
-        def cfun(res):
+        def cfun(res: np.ndarray) -> np.ndarray:
             return res / n
 
         return self.__array_fun__([np.sum], axis, dtype, out, keepdims, None, where, [sfun], cfun)
 
-    @wraps(np.min)
-    def min(self, axis=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+    @wraps(np.ndarray.min)
+    def min(self, axis=None, out=None, keepdims=False, initial=None, where=True, **_):
         return self.__array_fun__([np.min], axis, None, out, keepdims, [initial], where)
 
     @wraps(np.moveaxis)
@@ -643,11 +671,11 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         raise NotImplementedError('moveaxis is not implemented')
 
     @wraps(np.nanmax)
-    def nanmax(self, axis=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+    def nanmax(self, axis=None, out=None, keepdims=False, initial=None, where=True, **_):
         return self.__array_fun__([np.nanmax], axis, None, out, keepdims, [initial], where)
 
     @wraps(np.nanmean)
-    def nanmean(self, axis=None, dtype=None, out=None, keepdims=False, *, where=True, **kwargs):
+    def nanmean(self, axis=None, dtype=None, out=None, keepdims=False, *, where=True, **_):
         dtype = dtype or float
 
         def sfun(frame):
@@ -659,11 +687,11 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         return self.__array_fun__([np.nansum, np.sum], axis, dtype, out, keepdims, None, where, (sfun, nfun), truediv)
 
     @wraps(np.nanmin)
-    def nanmin(self, axis=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+    def nanmin(self, axis=None, out=None, keepdims=False, initial=None, where=True, **_):
         return self.__array_fun__([np.nanmin], axis, None, out, keepdims, [initial], where)
 
     @wraps(np.nansum)
-    def nansum(self, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+    def nansum(self, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True, **_):
         return self.__array_fun__([np.nansum], axis, dtype, out, keepdims, [initial], where)
 
     @wraps(np.nanstd)
@@ -692,14 +720,15 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         return self.__array_fun__([np.nansum, np.nansum, np.sum], axis, dtype, out, keepdims, None, where,
                                   (sfun, s2fun, nfun), cfun)
 
+    @wraps(np.ndarray.flatten)
     def flatten(self, *args, **kwargs):
         return np.asarray(self).flatten(*args, **kwargs)
 
-    @wraps(np.reshape)
+    @wraps(np.ndarray.reshape)
     def reshape(self, *args, **kwargs):
         return np.asarray(self).reshape(*args, **kwargs)
 
-    @wraps(np.squeeze)
+    @wraps(np.ndarray.squeeze)
     def squeeze(self, axes=None):
         new = self.copy()
         if axes is None:
@@ -713,15 +742,15 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         new.axes = ''.join(j for i, j in enumerate(new.axes) if i not in axes)
         return new
 
-    @wraps(np.std)
+    @wraps(np.ndarray.std)
     def std(self, axis=None, dtype=None, out=None, ddof=0, keepdims=None, *, where=True):
         return self.var(axis, dtype, out, ddof, keepdims, where=where, std=True)
 
-    @wraps(np.sum)
-    def sum(self, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True, **kwargs):
+    @wraps(np.ndarray.sum)
+    def sum(self, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True, **_):
         return self.__array_fun__([np.sum], axis, dtype, out, keepdims, [initial], where)
 
-    @wraps(np.swapaxes)
+    @wraps(np.ndarray.swapaxes)
     def swapaxes(self, axis1, axis2):
         new = self.copy()
         axes = new.axes
@@ -733,7 +762,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         new.axes = axes
         return new
 
-    @wraps(np.transpose)
+    @wraps(np.ndarray.transpose)
     def transpose(self, *axes):
         new = self.copy()
         if not axes:
@@ -742,7 +771,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             new.axes = ''.join(ax if isinstance(ax, str) else new.axes[ax] for ax in axes)
         return new
 
-    @wraps(np.var)
+    @wraps(np.ndarray.var)
     def var(self, axis=None, dtype=None, out=None, ddof=0, keepdims=None, *, where=True, std=False):
         dtype = dtype or float
         n = np.prod(self.shape) if axis is None else self.shape[axis]
@@ -761,15 +790,18 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 return (s2 - s ** 2 / n) / (n - ddof)
         return self.__array_fun__([np.sum, np.sum], axis, dtype, out, keepdims, None, where, (sfun, s2fun), cfun)
 
-    def asarray(self):
+    def asarray(self) -> np.ndarray:
         return self.__array__()
 
-    def astype(self, dtype, *args, **kwargs):
+    @wraps(np.ndarray.astype)
+    def astype(self, dtype, *_, **__):
         new = self.copy()
         new.dtype = dtype
         return new
 
-    def block(self, y=None, x=None, c=None, z=None, t=None):
+    def block(self, y: int | Sequence[int] = None, x: int | Sequence[int] = None,
+              c: int | Sequence[int] = None, z: int | Sequence[int] = None,
+              t: int | Sequence[int] = None) -> np.ndarray:
         """ returns 5D block of frames """
         y, x, c, z, t = (np.arange(self.shape[i]) if e is None else np.array(e, ndmin=1)
                          for i, e in zip('yxczt', (y, x, c, z, t)))
@@ -778,15 +810,15 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             d[:, :, ci, zi, ti] = self.frame(cj, zj, tj)[y][:, x]
         return d
 
-    def copy(self):
+    def copy(self) -> View:
         return View(self)
 
-    def data(self, c=0, z=0, t=0):
+    def data(self, c: int | Sequence[int] = 0, z: int | Sequence[int] = 0, t: int | Sequence[int] = 0) -> np.ndarray:
         """ returns 3D stack of frames """
         c, z, t = (np.arange(self.shape[i]) if e is None else np.array(e, ndmin=1) for i, e in zip('czt', (c, z, t)))
         return np.dstack([self.frame(ci, zi, ti) for ci, zi, ti in product(c, z, t)])
 
-    def frame(self, c=0, z=0, t=0):
+    def frame(self, c: int = 0, z: int = 0, t: int = 0) -> np.ndarray:
         """ returns single 2D frame """
         c = self.get_channel(c)
         c %= self.base.shape['c']
@@ -808,7 +840,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         else:
             return f.copy()
 
-    def get_channel(self, channel_name):
+    def get_channel(self, channel_name: str | int) -> int:
         if not isinstance(channel_name, str):
             return channel_name
         else:
@@ -818,14 +850,14 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             return c[0]
 
     @staticmethod
-    def get_config(file):
+    def get_config(file: Path | str) -> Any:
         """ Open a yml config file """
         loader = yaml.SafeLoader
         loader.add_implicit_resolver(
             r'tag:yaml.org,2002:float',
             re.compile(r'''^(?:
-                     [-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+]?[0-9]+)?
-                    |[-+]?(?:[0-9][0-9_]*)(?:[eE][-+]?[0-9]+)
+                     [-+]?([0-9][0-9_]*)\.[0-9_]*(?:[eE][-+]?[0-9]+)?
+                    |[-+]?([0-9][0-9_]*)([eE][-+]?[0-9]+)
                     |\.[0-9_]+(?:[eE][-+][0-9]+)?
                     |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*
                     |[-+]?\\.(?:inf|Inf|INF)
@@ -834,7 +866,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         with open(file) as f:
             return yaml.load(f, loader)
 
-    def get_czt(self, c, z, t):
+    def get_czt(self, c: int | Sequence[int], z: int | Sequence[int],
+                t: int | Sequence[int]) -> tuple[list[int], list[int], list[int]]:
         czt = []
         for i, n in zip('czt', (c, z, t)):
             if n is None:
@@ -848,10 +881,10 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                     stop = n.stop
                 czt.append(list(range(n.start % self.shape[i], stop, n.step)))
             elif isinstance(n, Number):
-                czt.append([n % self.shape[i]])  # noqa
+                czt.append([n % self.shape[i]])
             else:
                 czt.append([k % self.shape[i] for k in n])
-        return [self.get_channel(c) for c in czt[0]], *czt[1:]
+        return [self.get_channel(c) for c in czt[0]], *czt[1:3]  # type: ignore
 
     @staticmethod
     def bioformats_ome(path: [str, Path]) -> OME:
@@ -872,7 +905,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                     i = np.argsort(z[:, 1])
                     image.pixels.physical_size_z = np.nanmean(np.true_divide(*np.diff(z[i], axis=0).T)) * 1e6
                     image.pixels.physical_size_z_unit = 'µm'
-            except Exception:
+            except Exception:   # noqa
                 pass
         return ome
 
@@ -896,7 +929,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             cache[self.path] = self.fix_ome(ome)
         return cache[self.path]
 
-    def is_noise(self, volume=None):
+    def is_noise(self, volume: ArrayLike = None) -> bool:
         """ True if volume only has noise """
         if volume is None:
             volume = self
@@ -905,16 +938,19 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         return 1 - corr[tuple([0] * corr.ndim)] < 0.0067
 
     @staticmethod
-    def kill_vm():
+    def kill_vm() -> None:
         JVM().kill_vm()
 
-    def new(self, *args, **kwargs):
+    def new(self, *args: Any, **kwargs: Any) -> View:
         warnings.warn('Imread.new has been deprecated, use Imread.view instead.', DeprecationWarning, 2)
         return self.view(*args, **kwargs)
 
-    def save_as_tiff(self, fname=None, c=None, z=None, t=None, split=False, bar=True, pixel_type='uint16', **kwargs):
+    def save_as_tiff(self, fname: Path | str = None, c: int | Sequence[int] = None, z: int | Sequence[int] = None,
+                     t: int | Sequence[int] = None, split: bool = False, bar: bool = True, pixel_type: str = 'uint16',
+                     **kwargs: Any) -> None:
         """ saves the image as a tif file
             split: split channels into different files """
+        fname = Path(fname)
         if fname is None:
             fname = self.path.with_suffix('.tif')
             if fname == self.path:
@@ -944,7 +980,8 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                                  total=np.prod(shape), desc='Saving tiff', disable=not bar):
                     tif.save(m, *i)
 
-    def with_transform(self, channels=True, drift=False, file=None, bead_files=()):
+    def with_transform(self, channels: bool = True, drift: bool = False, file: Path | str = None,
+                       bead_files: Sequence[Path | str] = ()) -> View:
         """ returns a view where channels and/or frames are registered with an affine transformation
             channels: True/False register channels using bead_files
             drift: True/False register frames to correct drift
@@ -955,10 +992,12 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         view = self.view()
         if file is None:
             file = Path(view.path.parent) / 'transform.yml'
+        else:
+            file = Path(file)
         if not bead_files:
             try:
                 bead_files = Transforms.get_bead_files(view.path.parent)
-            except Exception:
+            except Exception:  # noqa
                 if not file.exists():
                     raise Exception('No transform file and no bead file found.')
                 bead_files = ()
@@ -981,23 +1020,23 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         return view
 
     @staticmethod
-    def split_path_series(path):
+    def split_path_series(path: Path | str) -> tuple[Path, int]:
         if isinstance(path, str):
             path = Path(path)
         if isinstance(path, Path) and path.name.startswith('Pos') and path.name.lstrip('Pos').isdigit():
             return path.parent, int(path.name.lstrip('Pos'))
         return path, 0
 
-    def view(self, *args, **kwargs):
+    def view(self, *args: Any, **kwargs: Any) -> View:
         return View(self, *args, **kwargs)
 
 
 class View(Imread, ABC):
-    def __init__(self, base, dtype=None):
+    def __init__(self, base: Imread, dtype: DTypeLike = None) -> None:
         super().__init__(base.base, base.slice, base.shape, dtype or base.dtype, base.frame_decorator)
         self.transform = base.transform
 
-    def __getattr__(self, item):
+    def __getattr__(self, item: str) -> Any:
         if not hasattr(self.base, item):
             raise AttributeError(f'{self.__class__} object has no attribute {item}')
         return self.base.__getattribute__(item)
@@ -1010,21 +1049,25 @@ class AbstractReader(Imread, metaclass=ABCMeta):
 
     @staticmethod
     @abstractmethod
-    def _can_open(path):  # Override this method, and return true when the subclass can open the file
+    def _can_open(path: Path | str) -> bool:
+        """ Override this method, and return true when the subclass can open the file """
         return False
 
     @abstractmethod
-    def __frame__(self, c, z, t):  # Override this, return the frame at c, z, t
+    def __frame__(self, c: int, z: int, t: int) -> np.ndarray:
+        """ Override this, return the frame at c, z, t """
         return np.random.randint(0, 255, self.shape['yx'])
 
-    def open(self):  # Optionally override this, open file handles etc.
-        """ filehandles cannot be pickled and should be marked such by setting do_not_pickle = 'file_handle_name' """
+    def open(self) -> None:
+        """ Optionally override this, open file handles etc.
+            filehandles cannot be pickled and should be marked such by setting do_not_pickle = 'file_handle_name' """
         return
 
-    def close(self):  # Optionally override this, close file handles etc.
+    def close(self) -> None:
+        """ Optionally override this, close file handles etc. """
         return
 
-    def __init__(self, path, dtype=None, axes=None):
+    def __init__(self, path: Path | str | Imread | Any = None, dtype: DTypeLike = None, axes: str = None) -> None:
         if isinstance(path, Imread):
             return
         super().__init__()
@@ -1114,8 +1157,9 @@ class AbstractReader(Imread, metaclass=ABCMeta):
                                  for channel in pixels.channels if channel.excitation_wavelength_quantity]
         self.laserpowers = try_default(lambda: [(1 - channel.light_source_settings.attenuation,)
                                                 for channel in pixels.channels], [])
-        self.filter = try_default(lambda: [find(instrument.filter_sets, id=channel.filter_set_ref.id).model
-                                           for channel in image.pixels.channels], None)
+        self.filter = try_default(  # type: ignore
+            lambda: [find(instrument.filter_sets, id=channel.filter_set_ref.id).model
+                     for channel in image.pixels.channels], None)
         self.pxsize_um = None if self.pxsize is None else self.pxsize.to(self.ureg.um).m
         self.exposuretime_s = [None if i is None else i.to(self.ureg.s).m for i in self.exposuretime]
 
@@ -1157,7 +1201,7 @@ class AbstractReader(Imread, metaclass=ABCMeta):
             sigma = np.hstack(sigma)
             sigma[sigma == 0] = 600 * ureg.nm
             sigma /= 2 * self.NA * self.pxsize
-            self.sigma = sigma.magnitude.tolist()
+            self.sigma = sigma.magnitude.tolist()  # type: ignore
         except Exception:  # noqa
             self.sigma = [2] * self.shape['c']
         if not self.NA:
@@ -1176,11 +1220,11 @@ class AbstractReader(Imread, metaclass=ABCMeta):
             self.track, self.detector = zip(*[[int(i) for i in p.findall(find(
                 self.ome.images[self.series].pixels.channels, id=f'Channel:{c}').detector_settings.id)[0]]
                                               for c in range(self.shape['c'])])
-        except Exception:
+        except Exception:  # noqa
             pass
 
 
-def main():
+def main() -> None:
     parser = ArgumentParser(description='Display info and save as tif')
     parser.add_argument('file', help='image_file')
     parser.add_argument('out', help='path to tif out', type=str, default=None, nargs='?')
@@ -1209,4 +1253,4 @@ def main():
                 f.write(im.ome.to_xml())
 
 
-from .readers import *
+from .readers import *  # noqa

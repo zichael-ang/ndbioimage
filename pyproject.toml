@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ndbioimage"
-version = "2024.4.4"
+version = "2024.4.5"
 description = "Bio image reading, metadata and some affine registration."
 authors = ["W. Pomp <w.pomp@nki.nl>"]
 license = "GPLv3"
@@ -8,7 +8,7 @@ readme = "README.md"
 keywords = ["bioformats", "imread", "numpy", "metadata"]
 include = ["transform.txt"]
 repository = "https://github.com/wimpomp/ndbioimage"
-exclude = [ "ndbioimage/jars" ]
+exclude = ["ndbioimage/jars"]
 
 [tool.poetry.dependencies]
 python = "^3.8"
@@ -24,7 +24,11 @@ lxml = "*"
 pyyaml = "*"
 parfor = ">=2024.3.0"
 JPype1 = "*"
-SimpleITK-SimpleElastix = "*"
+SimpleITK-SimpleElastix = [
+    { version = "*", python = "<3.12" },
+    { version = "*", python = ">=3.12", markers = "sys_platform != 'darwin'" },
+    { version = "*", python = ">=3.12", markers = "platform_machine == 'aarch64'" },
+]
 scikit-image = "*"
 imagecodecs = "*"
 xsdata = "^23"  # until pydantic is up-to-date
@@ -38,6 +42,9 @@ ndbioimage = "ndbioimage:main"
 
 [tool.pytest.ini_options]
 filterwarnings = ["ignore:::(colorcet)"]
+
+[tool.isort]
+line_length = 119
 
 [build-system]
 requires = ["poetry-core"]

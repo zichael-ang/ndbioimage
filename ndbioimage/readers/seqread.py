@@ -26,13 +26,13 @@ def lazy_property(function, field, *arg_fields):
 
 class Plane(model.Plane):
     """ Lazily retrieve delta_t from metadata """
-    def __init__(self, t0, file, **kwargs):
+    def __init__(self, t0, file, **kwargs):  # noqa
         super().__init__(**kwargs)
         # setting fields here because they would be removed by ome_types/pydantic after class definition
         setattr(self.__class__, 'delta_t', lazy_property(self.get_delta_t, 'delta_t', 't0', 'file'))
         setattr(self.__class__, 'delta_t_quantity', _quantity_property('delta_t'))
-        self.__dict__['t0'] = t0
-        self.__dict__['file'] = file
+        self.__dict__['t0'] = t0  # noqa
+        self.__dict__['file'] = file  # noqa
 
     @staticmethod
     def get_delta_t(t0, file):
