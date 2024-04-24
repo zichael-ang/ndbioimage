@@ -63,11 +63,11 @@ automatically recognize it and use it to open the appropriate file format. Image
 are required to implement the following methods:
 
 - staticmethod _can_open(path): return True if path can be opened by this reader
-- property ome: reads metadata from file and adds them to an OME object imported
-from the ome-types library 
 - \_\_frame__(self, c, z, t): return the frame at channel=c, z-slice=z, time=t from the file
 
 Optional methods:
+- get_ome: reads metadata from file and adds them to an OME object imported
+from the ome-types library 
 - open(self): maybe open some file handle
 - close(self): close any file handles
 

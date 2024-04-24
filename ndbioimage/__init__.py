@@ -256,11 +256,16 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 return super().__new__(subclass)
         raise ReaderNotFoundError(f'No reader found for {path}.')
 
-    def __init__(self, base: Imread = None,
-                 slice: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] = None,  # noqa
-                 shape: tuple[int, ...] = (0, 0, 0, 0, 0),
-                 dtype: DTypeLike = None,
-                 frame_decorator: Callable[[Imread, np.ndarray, int, int, int], np.ndarray] = None) -> None:
+    def __init__(self, *args: Any, **kwargs: Any):
+        def parse(base: Imread = None,  # noqa
+                  slice: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] = None,  # noqa
+                  shape: tuple[int, ...] = (0, 0, 0, 0, 0),  # noqa
+                  dtype: DTypeLike = None,  # noqa
+                  frame_decorator: Callable[[Imread, np.ndarray, int, int, int], np.ndarray] = None  # noqa
+                  ) -> tuple[Any, ...]:
+            return base, slice, shape, dtype, frame_decorator
+
+        base, slice, shape, dtype, frame_decorator = parse(*args, **kwargs)  # noqa
         self.base = base or self
         self.slice = slice
         self._shape = Shape(shape)
