@@ -261,6 +261,9 @@ class OmeParse:
         self.get_light_sources()
         self.get_filters()
         self.get_pixels()
+        self.get_channels()
+        self.get_planes()
+        self.get_annotations()
 
     @staticmethod
     def text(item: Optional[Element], default: str = "") -> str:
