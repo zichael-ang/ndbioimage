@@ -152,14 +152,23 @@ class OmeCache(DequeDict):
     def __reduce__(self) -> tuple[type, tuple]:
         return self.__class__, ()
 
-    def __getitem__(self, path: Path) -> OME:
-        return super().__getitem__(self.path_and_lstat(path))
+    def __getitem__(self, path: Path | str | tuple) -> OME:
+        if isinstance(path, tuple):
+            return super().__getitem__(path)
+        else:
+            return super().__getitem__(self.path_and_lstat(path))
 
-    def __setitem__(self, path: Path, value: OME) -> None:
-        super().__setitem__(self.path_and_lstat(path), value)
+    def __setitem__(self, path: Path | str | tuple, value: OME) -> None:
+        if isinstance(path, tuple):
+            super().__setitem__(path, value)
+        else:
+            super().__setitem__(self.path_and_lstat(path), value)
 
-    def __contains__(self, path: Path) -> bool:
-        return super().__contains__(self.path_and_lstat(path))
+    def __contains__(self, path: Path | str | tuple) -> bool:
+        if isinstance(path, tuple):
+            return super().__contains__(path)
+        else:
+            return super().__contains__(self.path_and_lstat(path))
 
     @staticmethod
     def path_and_lstat(path: str | Path) -> tuple[Path, Optional[os.stat_result], Optional[os.stat_result]]:
