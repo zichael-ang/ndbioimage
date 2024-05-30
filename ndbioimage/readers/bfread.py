@@ -1,30 +1,34 @@
 import multiprocessing
 from abc import ABC
 from multiprocessing import queues
-from traceback import print_exc
+from traceback import format_exc
+from pathlib import Path
 
 import numpy as np
 
-from .. import JVM, AbstractReader
+from .. import AbstractReader, JVM, JVMException
 
-jars = {'bioformats_package.jar':
-            'https://downloads.openmicroscopy.org/bio-formats/latest/artifacts/bioformats_package.jar'}
+jars = {'bioformats_package.jar': 'https://downloads.openmicroscopy.org/bio-formats/latest/artifacts/'
+                                  'bioformats_package.jar'}
 
 
 class JVMReader:
-    def __init__(self, path, series):
+    def __init__(self, path: Path, series: int) -> None:
         mp = multiprocessing.get_context('spawn')
         self.path = path
         self.series = series
         self.queue_in = mp.Queue()
         self.queue_out = mp.Queue()
-        self.queue_error = mp.Queue()
         self.done = mp.Event()
         self.process = mp.Process(target=self.run)
         self.process.start()
-        self.is_alive = True
+        status, message = self.queue_out.get()
+        if status == 'status' and message == 'started':
+            self.is_alive = True
+        else:
+            raise JVMException(message)
 
-    def close(self):
+    def close(self) -> None:
         if self.is_alive:
             self.done.set()
             while not self.queue_in.empty():
@@ -38,47 +42,53 @@ class JVMReader:
             self.process.close()
             self.is_alive = False
 
-    def frame(self, c, z, t):
+    def frame(self, c: int, z: int, t: int) -> np.ndarray:
         self.queue_in.put((c, z, t))
-        return self.queue_out.get()
+        status, message = self.queue_out.get()
+        if status == 'frame':
+            return message
+        else:
+            raise JVMException(message)
 
-    def run(self):
+    def run(self) -> None:
         """ Read planes from the image reader file.
             adapted from python-bioformats/bioformats/formatreader.py
         """
-        jvm = JVM(jars)
-        reader = jvm.image_reader()
-        ome_meta = jvm.metadata_tools.createOMEXMLMetadata()
-        reader.setMetadataStore(ome_meta)
-        reader.setId(str(self.path))
-        reader.setSeries(self.series)
-
-        open_bytes_func = reader.openBytes
-        width, height = int(reader.getSizeX()), int(reader.getSizeY())
-
-        pixel_type = reader.getPixelType()
-        little_endian = reader.isLittleEndian()
-
-        if pixel_type == jvm.format_tools.INT8:
-            dtype = np.int8
-        elif pixel_type == jvm.format_tools.UINT8:
-            dtype = np.uint8
-        elif pixel_type == jvm.format_tools.UINT16:
-            dtype = '<u2' if little_endian else '>u2'
-        elif pixel_type == jvm.format_tools.INT16:
-            dtype = '<i2' if little_endian else '>i2'
-        elif pixel_type == jvm.format_tools.UINT32:
-            dtype = '<u4' if little_endian else '>u4'
-        elif pixel_type == jvm.format_tools.INT32:
-            dtype = '<i4' if little_endian else '>i4'
-        elif pixel_type == jvm.format_tools.FLOAT:
-            dtype = '<f4' if little_endian else '>f4'
-        elif pixel_type == jvm.format_tools.DOUBLE:
-            dtype = '<f8' if little_endian else '>f8'
-        else:
-            dtype = None
-
+        jvm = None
         try:
+            jvm = JVM(jars)
+            reader = jvm.image_reader()
+            ome_meta = jvm.metadata_tools.createOMEXMLMetadata()
+            reader.setMetadataStore(ome_meta)
+            reader.setId(str(self.path))
+            reader.setSeries(self.series)
+
+            open_bytes_func = reader.openBytes
+            width, height = int(reader.getSizeX()), int(reader.getSizeY())
+
+            pixel_type = reader.getPixelType()
+            little_endian = reader.isLittleEndian()
+
+            if pixel_type == jvm.format_tools.INT8:
+                dtype = np.int8
+            elif pixel_type == jvm.format_tools.UINT8:
+                dtype = np.uint8
+            elif pixel_type == jvm.format_tools.UINT16:
+                dtype = '<u2' if little_endian else '>u2'
+            elif pixel_type == jvm.format_tools.INT16:
+                dtype = '<i2' if little_endian else '>i2'
+            elif pixel_type == jvm.format_tools.UINT32:
+                dtype = '<u4' if little_endian else '>u4'
+            elif pixel_type == jvm.format_tools.INT32:
+                dtype = '<i4' if little_endian else '>i4'
+            elif pixel_type == jvm.format_tools.FLOAT:
+                dtype = '<f4' if little_endian else '>f4'
+            elif pixel_type == jvm.format_tools.DOUBLE:
+                dtype = '<f8' if little_endian else '>f8'
+            else:
+                dtype = None
+            self.queue_out.put(('status', 'started'))
+
             while not self.done.is_set():
                 try:
                     c, z, t = self.queue_in.get(True, 0.02)
@@ -151,19 +161,19 @@ class JVMReader:
                         image.shape = (height, width)
 
                     if image.ndim == 3:
-                        self.queue_out.put(image[..., c])
+                        self.queue_out.put(('frame', image[..., c]))
                     else:
-                        self.queue_out.put(image)
+                        self.queue_out.put(('frame', image))
                 except queues.Empty:  # noqa
                     continue
         except (Exception,):
-            print_exc()
-            self.queue_out.put(np.zeros((32, 32)))
+            self.queue_out.put(('error', format_exc()))
         finally:
-            jvm.kill_vm()
+            if jvm is not None:
+                jvm.kill_vm()
 
 
-def can_open(path):
+def can_open(path: Path) -> bool:
     try:
         jvm = JVM(jars)
         reader = jvm.image_reader()
@@ -183,17 +193,16 @@ class Reader(AbstractReader, ABC):
     do_not_pickle = 'reader', 'key', 'jvm'
 
     @staticmethod
-    def _can_open(path):
+    def _can_open(path: Path) -> bool:
         """ Use java BioFormats to make an ome metadata structure. """
         with multiprocessing.get_context('spawn').Pool(1) as pool:
-            ome = pool.map(can_open, (path,))[0]
-            return ome
+            return pool.map(can_open, (path,))[0]
 
-    def open(self):
+    def open(self) -> None:
         self.reader = JVMReader(self.path, self.series)
 
-    def __frame__(self, c, z, t):
+    def __frame__(self, c: int, z: int, t: int) -> np.ndarray:
         return self.reader.frame(c, z, t)
 
-    def close(self):
+    def close(self) -> None:
         self.reader.close()

@@ -1,6 +1,11 @@
 from pathlib import Path
 from urllib import request
 
+
+class JVMException(Exception):
+    pass
+
+
 try:
     class JVM:
         """ There can be only one java virtual machine per python process,

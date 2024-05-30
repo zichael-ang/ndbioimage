@@ -24,7 +24,7 @@ from pint import set_application_registry
 from tiffwrite import IFD, IJTiffFile  # noqa
 from tqdm.auto import tqdm
 
-from .jvm import JVM
+from .jvm import JVM, JVMException
 from .transforms import Transform, Transforms
 
 try:
@@ -1134,12 +1134,13 @@ class AbstractReader(Imread, metaclass=ABCMeta):
         try:
             t0 = find(image.pixels.planes, the_c=0, the_t=0, the_z=0).delta_t
             t1 = find(image.pixels.planes, the_c=0, the_t=self.shape['t'] - 1, the_z=0).delta_t
-            self.timeinterval = (t1 - t0) / (self.shape['t'] - 1) if self.shape['t'] > 1 else None
+            self.timeinterval = (t1 - t0) / (self.shape['t'] - 1) if self.shape['t'] > 1 and t1 > t0 else None
         except AttributeError:
             self.timeinterval = None
         try:
             self.binning = [int(i) for i in image.pixels.channels[0].detector_settings.binning.value.split('x')]
-            self.pxsize *= self.binning[0]
+            if self.pxsize is not None:
+                self.pxsize *= self.binning[0]
         except (AttributeError, IndexError, ValueError):
             self.binning = None
         self.channel_names = [channel.name for channel in image.pixels.channels]
