@@ -17,7 +17,15 @@ Currently, it supports imagej tif files, czi files, micromanager tif sequences a
 pip install ndbioimage
 ```
 
+### Installation with option to write mp4 or mkv:
+Work in progress!
+
+```
+pip install ndbioimage[write]
+```
+
 ## Usage
+### Python
 
 - Reading an image file and plotting the frame at channel=2, time=1
 
@@ -56,6 +64,12 @@ import numpy as np
 with Imread('image_file.tif', axes='cztyx') as im:
     array = np.asarray(im[0, 0])
 ```
+
+### Command line
+```ndbioimage --help```: show help  
+```ndbioimage image```: show metadata about image  
+```ndbioimage image {name}.tif -r```: copy image into image.tif (replacing {name} with image), while registering channels  
+```ndbioimage image image.mp4 -C cyan lime red``` copy image into image.mp4 (z will be max projected), make channel colors cyan lime and red
 
 ## Adding more formats
 Readers for image formats subclass AbstractReader. When an image reader is imported, Imread will

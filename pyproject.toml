@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ndbioimage"
-version = "2024.5.1"
+version = "2024.5.2"
 description = "Bio image reading, metadata and some affine registration."
 authors = ["W. Pomp <w.pomp@nki.nl>"]
 license = "GPLv3"
@@ -32,10 +32,13 @@ SimpleITK-SimpleElastix = [
 scikit-image = "*"
 imagecodecs = "*"
 xsdata = "^23"  # until pydantic is up-to-date
+matplotlib = { version = "*", optional = true }
+scikit-video = { version = "*", optional = true }
 pytest = { version = "*", optional = true }
 
 [tool.poetry.extras]
 test = ["pytest"]
+write = ["matplotlib", "scikit-video"]
 
 [tool.poetry.scripts]
 ndbioimage = "ndbioimage:main"

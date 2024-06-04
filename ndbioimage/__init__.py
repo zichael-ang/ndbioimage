@@ -22,7 +22,7 @@ from numpy.typing import ArrayLike, DTypeLike
 from ome_types import OME, from_xml, model, ureg
 from pint import set_application_registry
 from tiffwrite import IFD, IJTiffFile  # noqa
-from tqdm.auto import tqdm
+from tqdm.auto import tqdm, trange
 
 from .jvm import JVM, JVMException
 from .transforms import Transform, Transforms
@@ -959,12 +959,52 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         warnings.warn('Imread.new has been deprecated, use Imread.view instead.', DeprecationWarning, 2)
         return self.view(*args, **kwargs)
 
+    def save_as_movie(self, fname: Path | str = None,
+                      c: int | Sequence[int] = None, z: int | Sequence[int] = None,  # noqa
+                      t: int | Sequence[int] = None,  # noqa
+                      colors: tuple[str] = None, brightnesses: tuple[float] = None,
+                      scale: int = None) -> None:
+        """ saves the image as a mp4 or mkv file """
+        from matplotlib.colors import to_rgb
+        from skvideo.io import FFmpegWriter
+
+        def get_ab(tyx: Imread, p: tuple[float, float] = (1, 99)) -> tuple[float, float]:
+            s = tyx.flatten()
+            s = s[s > 0]
+            a, b = np.percentile(s, p)
+            if a == b:
+                a, b = np.min(s), np.max(s)
+            if a == b:
+                a, b = 0, 1
+            return a, b
+
+        def cframe(frame: ArrayLike, color: str, a: float, b: float, scale: float = 1) -> np.ndarray:  # noqa
+            color = to_rgb(color)
+            frame = (frame - a) / (b - a)
+            frame = np.dstack([255 * frame * i for i in color])
+            return np.clip(np.round(frame), 0, 255).astype('uint8')
+
+        ab = list(zip(*[get_ab(i) for i in self.transpose('cztyx')]))
+        colors = colors or ('r', 'g', 'b')[:self.shape['c']] + max(0, self.shape['c'] - 3) * ('w',)
+        brightnesses = brightnesses or (1,) * self.shape['c']
+        scale = scale or 1
+        with FFmpegWriter(
+                str(fname).format(name=self.path.stem, path=str(self.path.parent)),
+                outputdict={'-vcodec': 'libx264', '-preset': 'veryslow', '-pix_fmt': 'yuv420p', '-r': '7',
+                            '-vf': f'setpts={25 / 7}*PTS,'
+                                   f'scale={self.shape["x"] * scale}:{self.shape["y"] * scale}:flags=neighbor'}
+        ) as movie:
+            im = self.transpose('tzcyx')
+            for t in trange(self.shape['t'], desc='Saving movie'):
+                movie.writeFrame(np.max([cframe(yx, c, a, b / s, scale)
+                                         for yx, a, b, c, s in zip(im[t].max('z'), *ab, colors, brightnesses)], 0))
+
     def save_as_tiff(self, fname: Path | str = None, c: int | Sequence[int] = None, z: int | Sequence[int] = None,
                      t: int | Sequence[int] = None, split: bool = False, bar: bool = True, pixel_type: str = 'uint16',
                      **kwargs: Any) -> None:
         """ saves the image as a tif file
             split: split channels into different files """
-        fname = Path(fname)
+        fname = Path(str(fname).format(name=self.path.stem, path=str(self.path.parent)))
         if fname is None:
             fname = self.path.with_suffix('.tif')
             if fname == self.path:
@@ -1242,7 +1282,7 @@ class AbstractReader(Imread, metaclass=ABCMeta):
 def main() -> None:
     parser = ArgumentParser(description='Display info and save as tif')
     parser.add_argument('file', help='image_file')
-    parser.add_argument('out', help='path to tif out', type=str, default=None, nargs='?')
+    parser.add_argument('out', help='path to tif/movie out', type=str, default=None, nargs='?')
     parser.add_argument('-o', '--extract_ome', help='extract ome to xml file', action='store_true')
     parser.add_argument('-r', '--register', help='register channels', action='store_true')
     parser.add_argument('-c', '--channel', help='channel', type=int, default=None)
@@ -1250,6 +1290,10 @@ def main() -> None:
     parser.add_argument('-t', '--time', help='time', type=int, default=None)
     parser.add_argument('-s', '--split', help='split channels', action='store_true')
     parser.add_argument('-f', '--force', help='force overwrite', action='store_true')
+    parser.add_argument('-C', '--movie-colors', help='colors for channels in movie', type=str, nargs='*')
+    parser.add_argument('-B', '--movie-brightnesses', help='scale brightness of each channel',
+                        type=float, nargs='*')
+    parser.add_argument('-S', '--movie-scale', help='upscale movie xy size, int', type=int)
     args = parser.parse_args()
 
     with Imread(args.file) as im:
@@ -1261,6 +1305,9 @@ def main() -> None:
             out.parent.mkdir(parents=True, exist_ok=True)
             if out.exists() and not args.force:
                 print(f'File {args.out} exists already, add the -f flag if you want to overwrite it.')
+            elif out.suffix in ('.mkv', '.mp4'):
+                im.save_as_movie(out, args.channel, args.zslice, args.time,
+                                 args.movie_colors, args.movie_brightnesses, args.movie_scale)
             else:
                 im.save_as_tiff(out, args.channel, args.zslice, args.time, args.split)
         if args.extract_ome:
