@@ -182,7 +182,7 @@ class Transforms(dict):
             in the horizontal direction """
         from . import Imread
 
-        with Imread(bead_file, axes='zcxy') as im:  # noqa
+        with Imread(bead_file, axes='zcyx') as im:  # noqa
             max_ims = im.max('z')
             goodch = [c for c, max_im in enumerate(max_ims) if not im.is_noise(max_im)]
             if not goodch:

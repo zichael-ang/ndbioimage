@@ -18,7 +18,7 @@ pip install ndbioimage
 ```
 
 ### Installation with option to write mp4 or mkv:
-Work in progress!
+Work in progress! Make sure ffmpeg is installed.
 
 ```
 pip install ndbioimage[write]

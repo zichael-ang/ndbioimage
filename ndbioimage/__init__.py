@@ -20,6 +20,7 @@ import numpy as np
 import yaml
 from numpy.typing import ArrayLike, DTypeLike
 from ome_types import OME, from_xml, model, ureg
+from parfor import pmap
 from pint import set_application_registry
 from tiffwrite import IFD, IJTiffFile  # noqa
 from tqdm.auto import tqdm, trange
@@ -963,7 +964,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                       c: int | Sequence[int] = None, z: int | Sequence[int] = None,  # noqa
                       t: int | Sequence[int] = None,  # noqa
                       colors: tuple[str] = None, brightnesses: tuple[float] = None,
-                      scale: int = None) -> None:
+                      scale: int = None, bar: bool = True) -> None:
         """ saves the image as a mp4 or mkv file """
         from matplotlib.colors import to_rgb
         from skvideo.io import FFmpegWriter
@@ -995,7 +996,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                                    f'scale={self.shape["x"] * scale}:{self.shape["y"] * scale}:flags=neighbor'}
         ) as movie:
             im = self.transpose('tzcyx')
-            for t in trange(self.shape['t'], desc='Saving movie'):
+            for t in trange(self.shape['t'], desc='Saving movie', disable=not bar):
                 movie.writeFrame(np.max([cframe(yx, c, a, b / s, scale)
                                          for yx, a, b, c, s in zip(im[t].max('z'), *ab, colors, brightnesses)], 0))
 
@@ -1281,8 +1282,9 @@ class AbstractReader(Imread, metaclass=ABCMeta):
 
 def main() -> None:
     parser = ArgumentParser(description='Display info and save as tif')
-    parser.add_argument('file', help='image_file')
-    parser.add_argument('out', help='path to tif/movie out', type=str, default=None, nargs='?')
+    parser.add_argument('-v', '--version', action='version', version=__version__)
+    parser.add_argument('file', help='image_file', type=str, nargs='*')
+    parser.add_argument('-w', '--write', help='path to tif/movie out', type=str, default=None)
     parser.add_argument('-o', '--extract_ome', help='extract ome to xml file', action='store_true')
     parser.add_argument('-r', '--register', help='register channels', action='store_true')
     parser.add_argument('-c', '--channel', help='channel', type=int, default=None)
@@ -1296,23 +1298,28 @@ def main() -> None:
     parser.add_argument('-S', '--movie-scale', help='upscale movie xy size, int', type=int)
     args = parser.parse_args()
 
-    with Imread(args.file) as im:
-        if args.register:
-            im = im.with_transform()
-        print(im.summary)
-        if args.out:
-            out = Path(args.out).absolute()
-            out.parent.mkdir(parents=True, exist_ok=True)
-            if out.exists() and not args.force:
-                print(f'File {args.out} exists already, add the -f flag if you want to overwrite it.')
-            elif out.suffix in ('.mkv', '.mp4'):
-                im.save_as_movie(out, args.channel, args.zslice, args.time,
-                                 args.movie_colors, args.movie_brightnesses, args.movie_scale)
-            else:
-                im.save_as_tiff(out, args.channel, args.zslice, args.time, args.split)
-        if args.extract_ome:
-            with open(im.path.with_suffix('.ome.xml'), 'w') as f:
-                f.write(im.ome.to_xml())
+    def fun(file: Path) -> str:  # noqa
+        with Imread(file) as im:  # noqa
+            if args.register:
+                im = im.with_transform()  # noqa
+            if args.write:
+                write = Path(args.write).absolute()  # noqa
+                write.parent.mkdir(parents=True, exist_ok=True)
+                if write.exists() and not args.force:
+                    print(f'File {args.out} exists already, add the -f flag if you want to overwrite it.')
+                elif write.suffix in ('.mkv', '.mp4'):
+                    im.save_as_movie(write, args.channel, args.zslice, args.time, args.movie_colors,
+                                     args.movie_brightnesses, args.movie_scale, bar=len(args.file) == 1)
+                else:
+                    im.save_as_tiff(write, args.channel, args.zslice, args.time, args.split, bar=len(args.file) == 1)
+            if args.extract_ome:
+                with open(im.path.with_suffix('.ome.xml'), 'w') as f:
+                    f.write(im.ome.to_xml())
+            return im.summary
+
+    summaries = pmap(fun, args.file)
+    if len(args.file) == 1:
+        print(summaries[0])
 
 
 from .readers import *  # noqa

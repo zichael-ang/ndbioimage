@@ -565,7 +565,7 @@ class OmeParse:
             exposure_times = [None] * len(self.channels_im)
         delta_ts = self.attachments['TimeStamps'].data()
         dt = np.diff(delta_ts)
-        if np.std(dt) / np.mean(dt) > 0.02:
+        if len(dt) and np.std(dt) / np.mean(dt) > 0.02:
             dt = np.median(dt[dt > 0])
             delta_ts = dt * np.arange(len(delta_ts))
             warnings.warn(f'delta_t is inconsistent, using median value: {dt}')
