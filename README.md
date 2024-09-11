@@ -1,6 +1,6 @@
 [![Pytest](https://github.com/wimpomp/ndbioimage/actions/workflows/pytest.yml/badge.svg)](https://github.com/wimpomp/ndbioimage/actions/workflows/pytest.yml)
 
-# ndbioimage - Work in progress
+# ndbioimage
 
 Exposes (bio) images as a numpy ndarray-like object, but without loading the whole
 image into memory, reading from the file only when needed. Some metadata is read

@@ -20,7 +20,6 @@ import numpy as np
 import yaml
 from numpy.typing import ArrayLike, DTypeLike
 from ome_types import OME, from_xml, model, ureg
-from parfor import pmap
 from pint import set_application_registry
 from tiffwrite import IFD, IJTiffFile  # noqa
 from tqdm.auto import tqdm, trange
@@ -384,7 +383,9 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
     def __str__(self) -> str:
         return str(self.path)
 
-    def __array__(self, dtype: DTypeLike = None) -> np.ndarray:
+    def __array__(self, dtype: DTypeLike = None, copy: bool = None) -> np.ndarray:
+        if copy is False:
+            raise ValueError("`copy=False` isn't supported. A copy is always created.")
         block = self.block(*self.slice)
         axes_idx = [self.shape.axes.find(i) for i in 'yxczt']
         axes_squeeze = tuple({i for i, j in enumerate(axes_idx) if j == -1}.union(
@@ -1284,7 +1285,7 @@ def main() -> None:
     parser = ArgumentParser(description='Display info and save as tif')
     parser.add_argument('-v', '--version', action='version', version=__version__)
     parser.add_argument('file', help='image_file', type=str, nargs='*')
-    parser.add_argument('-w', '--write', help='path to tif/movie out', type=str, default=None)
+    parser.add_argument('-w', '--write', help='path to tif/movie out, {folder}, {name} and {ext} take this from file in', type=str, default=None)
     parser.add_argument('-o', '--extract_ome', help='extract ome to xml file', action='store_true')
     parser.add_argument('-r', '--register', help='register channels', action='store_true')
     parser.add_argument('-c', '--channel', help='channel', type=int, default=None)
@@ -1298,12 +1299,13 @@ def main() -> None:
     parser.add_argument('-S', '--movie-scale', help='upscale movie xy size, int', type=int)
     args = parser.parse_args()
 
-    def fun(file: Path) -> str:  # noqa
+    for file in tqdm(args.file, desc='operating on files', disable=len(args.file) == 1):
+        file = Path(file)
         with Imread(file) as im:  # noqa
             if args.register:
                 im = im.with_transform()  # noqa
             if args.write:
-                write = Path(args.write).absolute()  # noqa
+                write = Path(args.write.format(folder=str(file.parent), name=file.stem, ext=file.suffix)).absolute()  # noqa
                 write.parent.mkdir(parents=True, exist_ok=True)
                 if write.exists() and not args.force:
                     print(f'File {args.out} exists already, add the -f flag if you want to overwrite it.')
@@ -1315,11 +1317,8 @@ def main() -> None:
             if args.extract_ome:
                 with open(im.path.with_suffix('.ome.xml'), 'w') as f:
                     f.write(im.ome.to_xml())
-            return im.summary
-
-    summaries = pmap(fun, args.file)
-    if len(args.file) == 1:
-        print(summaries[0])
+            if len(args.file) == 1:
+                print(im.summary)
 
 
 from .readers import *  # noqa
