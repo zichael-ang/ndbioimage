@@ -46,7 +46,11 @@ class Reader(AbstractReader, ABC):
 
     @staticmethod
     def _can_open(path):
-        return isinstance(path, Path) and path.is_dir()
+        if isinstance(path, Path) and path.is_dir():
+            files = [file for file in path.iterdir() if file.name.lower().startswith('pos')]
+            return len(files) > 0 and files[0].is_dir()
+        else:
+            return False
 
     def get_ome(self):
         ome = model.OME()
@@ -117,7 +121,7 @@ class Reader(AbstractReader, ABC):
         else:
             path = self.path
 
-        pat = re.compile(r'^img_\d{3,}.*\d{3,}.*\.tif$')
+        pat = re.compile(r'^img_\d{3,}.*\d{3,}.*\.(tif|TIF)$')
         filelist = sorted([file for file in path.iterdir() if pat.search(file.name)])
         with tifffile.TiffFile(self.path / filelist[0]) as tif:
             metadata = {key: yaml.safe_load(value) for key, value in tif.pages[0].tags[50839].value.items()}

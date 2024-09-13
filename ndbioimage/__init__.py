@@ -177,6 +177,11 @@ class OmeCache(DequeDict):
                 (path.with_suffix('.ome.xml').lstat() if path.with_suffix('.ome.xml').exists() else None))
 
 
+def get_positions(path: str | Path) -> Optional[list[int]]:
+    subclass = AbstractReader.get_subclass(path)
+    return subclass.get_positions(AbstractReader.split_path_series(path)[0])
+
+
 class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
     """ class to read image files, while taking good care of important metadata,
         currently optimized for .czi files, but can open anything that bioformats can handle
@@ -246,13 +251,10 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
     pcf: Optional[list[float]]
     __frame__: Callable[[int, int, int], np.ndarray]
 
-    def __new__(cls, path: Path | str | Imread | Any = None, dtype: DTypeLike = None, axes: str = None) -> Imread:
-        if cls is not Imread:
-            return super().__new__(cls)
+    @staticmethod
+    def get_subclass(path: Path | str | Any):
         if len(AbstractReader.__subclasses__()) == 0:
             raise Exception('Restart python kernel please!')
-        if isinstance(path, Imread):
-            return path
         path, _ = AbstractReader.split_path_series(path)
         for subclass in sorted(AbstractReader.__subclasses__(), key=lambda subclass_: subclass_.priority):
             if subclass._can_open(path):  # noqa
@@ -261,9 +263,22 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                 subclass_do_not_pickle = (subclass.do_not_pickle,) if isinstance(subclass.do_not_pickle, str) \
                     else subclass.do_not_pickle if hasattr(subclass, 'do_not_pickle') else ()
                 subclass.do_not_pickle = set(do_not_pickle).union(set(subclass_do_not_pickle))
-
-                return super().__new__(subclass)
+                return subclass
         raise ReaderNotFoundError(f'No reader found for {path}.')
+
+
+    def __new__(cls, path: Path | str | Imread | Any = None, dtype: DTypeLike = None, axes: str = None) -> Imread:
+        if cls is not Imread:
+            return super().__new__(cls)
+        if isinstance(path, Imread):
+            return path
+        subclass = cls.get_subclass(path)
+        do_not_pickle = (AbstractReader.do_not_pickle,) if isinstance(AbstractReader.do_not_pickle, str) \
+            else AbstractReader.do_not_pickle
+        subclass_do_not_pickle = (subclass.do_not_pickle,) if isinstance(subclass.do_not_pickle, str) \
+            else subclass.do_not_pickle if hasattr(subclass, 'do_not_pickle') else ()
+        subclass.do_not_pickle = set(do_not_pickle).union(set(subclass_do_not_pickle))
+        return super().__new__(subclass)
 
     def __init__(self, *args: Any, **kwargs: Any):
         def parse(base: Imread = None,  # noqa
@@ -990,11 +1005,13 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
         colors = colors or ('r', 'g', 'b')[:self.shape['c']] + max(0, self.shape['c'] - 3) * ('w',)
         brightnesses = brightnesses or (1,) * self.shape['c']
         scale = scale or 1
+        shape_x = 2 * ((self.shape['x'] * scale + 1) // 2)
+        shape_y = 2 * ((self.shape['y'] * scale + 1) // 2)
+
         with FFmpegWriter(
                 str(fname).format(name=self.path.stem, path=str(self.path.parent)),
                 outputdict={'-vcodec': 'libx264', '-preset': 'veryslow', '-pix_fmt': 'yuv420p', '-r': '7',
-                            '-vf': f'setpts={25 / 7}*PTS,'
-                                   f'scale={self.shape["x"] * scale}:{self.shape["y"] * scale}:flags=neighbor'}
+                            '-vf': f'setpts={25 / 7}*PTS,scale={shape_x}:{shape_y}:flags=neighbor'}
         ) as movie:
             im = self.transpose('tzcyx')
             for t in trange(self.shape['t'], desc='Saving movie', disable=not bar):
@@ -1108,6 +1125,10 @@ class AbstractReader(Imread, metaclass=ABCMeta):
     def _can_open(path: Path | str) -> bool:
         """ Override this method, and return true when the subclass can open the file """
         return False
+
+    @staticmethod
+    def get_positions(path: str | Path) -> Optional[list[int]]:
+        return None
 
     @abstractmethod
     def __frame__(self, c: int, z: int, t: int) -> np.ndarray:
@@ -1296,7 +1317,7 @@ def main() -> None:
     parser.add_argument('-C', '--movie-colors', help='colors for channels in movie', type=str, nargs='*')
     parser.add_argument('-B', '--movie-brightnesses', help='scale brightness of each channel',
                         type=float, nargs='*')
-    parser.add_argument('-S', '--movie-scale', help='upscale movie xy size, int', type=int)
+    parser.add_argument('-S', '--movie-scale', help='upscale movie xy size, int', type=float)
     args = parser.parse_args()
 
     for file in tqdm(args.file, desc='operating on files', disable=len(args.file) == 1):
@@ -1308,7 +1329,7 @@ def main() -> None:
                 write = Path(args.write.format(folder=str(file.parent), name=file.stem, ext=file.suffix)).absolute()  # noqa
                 write.parent.mkdir(parents=True, exist_ok=True)
                 if write.exists() and not args.force:
-                    print(f'File {args.out} exists already, add the -f flag if you want to overwrite it.')
+                    print(f'File {args.write} exists already, add the -f flag if you want to overwrite it.')
                 elif write.suffix in ('.mkv', '.mp4'):
                     im.save_as_movie(write, args.channel, args.zslice, args.time, args.movie_colors,
                                      args.movie_brightnesses, args.movie_scale, bar=len(args.file) == 1)

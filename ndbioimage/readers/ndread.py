@@ -46,9 +46,6 @@ class Reader(AbstractReader, ABC):
             self.path = 'numpy array'
 
     def __frame__(self, c, z, t):
-        # xyczt = (slice(None), slice(None), c, z, t)
-        # in_idx = tuple(xyczt['xyczt'.find(i)] for i in self.axes)
-        # print(f'{in_idx = }')
         frame = self.array[:, :, c, z, t]
         if self.axes.find('y') > self.axes.find('x'):
             return frame.T
