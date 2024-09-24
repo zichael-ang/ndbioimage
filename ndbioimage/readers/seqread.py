@@ -46,11 +46,9 @@ class Reader(AbstractReader, ABC):
 
     @staticmethod
     def _can_open(path):
-        if isinstance(path, Path) and path.is_dir():
-            files = [file for file in path.iterdir() if file.name.lower().startswith('pos')]
-            return len(files) > 0 and files[0].is_dir()
-        else:
-            return False
+        pat = re.compile(r'(?:\d+-)?Pos.*', re.IGNORECASE)
+        return (isinstance(path, Path) and path.is_dir() and
+                (pat.match(path.name) or any(file.is_dir() and pat.match(file.stem) for file in path.iterdir())))
 
     def get_ome(self):
         ome = model.OME()
@@ -104,7 +102,7 @@ class Reader(AbstractReader, ABC):
                       the_c=c, the_z=z, the_t=t, exposure_time=metadata['Info']['Exposure-ms'] / 1000))
 
         # compare channel names from metadata with filenames
-        pattern_c = re.compile(r'img_\d{3,}_(.*)_\d{3,}$')
+        pattern_c = re.compile(r'img_\d{3,}_(.*)_\d{3,}$', re.IGNORECASE)
         for c in range(size_c):
             ome.images[0].pixels.channels.append(
                 model.Channel(
@@ -115,13 +113,13 @@ class Reader(AbstractReader, ABC):
         return ome
 
     def open(self):
-        pat = re.compile(r'(?:\d+-)?Pos.*')
+        pat = re.compile(r'(?:\d+-)?Pos.*', re.IGNORECASE)
         if pat.match(self.path.name) is None:
             path = sorted(file for file in self.path.iterdir() if pat.match(file.name))[self.series]
         else:
             path = self.path
 
-        pat = re.compile(r'^img_\d{3,}.*\d{3,}.*\.(tif|TIF)$')
+        pat = re.compile(r'^img_\d{3,}.*\d{3,}.*\.tif$', re.IGNORECASE)
         filelist = sorted([file for file in path.iterdir() if pat.search(file.name)])
         with tifffile.TiffFile(self.path / filelist[0]) as tif:
             metadata = {key: yaml.safe_load(value) for key, value in tif.pages[0].tags[50839].value.items()}
@@ -130,9 +128,9 @@ class Reader(AbstractReader, ABC):
         cnamelist = metadata['Info']['Summary']['ChNames']
         cnamelist = [c for c in cnamelist if any([c in f.name for f in filelist])]
 
-        pattern_c = re.compile(r'img_\d{3,}_(.*)_\d{3,}$')
+        pattern_c = re.compile(r'img_\d{3,}_(.*)_\d{3,}$', re.IGNORECASE)
         pattern_z = re.compile(r'(\d{3,})$')
-        pattern_t = re.compile(r'img_(\d{3,})')
+        pattern_t = re.compile(r'img_(\d{3,})', re.IGNORECASE)
         self.filedict = {(cnamelist.index(pattern_c.findall(file.stem)[0]),  # noqa
                           int(pattern_z.findall(file.stem)[0]),
                           int(pattern_t.findall(file.stem)[0])): file for file in filelist}

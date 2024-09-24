@@ -978,12 +978,19 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
 
     def save_as_movie(self, fname: Path | str = None,
                       c: int | Sequence[int] = None, z: int | Sequence[int] = None,  # noqa
-                      t: int | Sequence[int] = None,  # noqa
+                      t: str | int | Sequence[int] = None,  # noqa
                       colors: tuple[str] = None, brightnesses: tuple[float] = None,
                       scale: int = None, bar: bool = True) -> None:
         """ saves the image as a mp4 or mkv file """
         from matplotlib.colors import to_rgb
         from skvideo.io import FFmpegWriter
+
+        if t is None:
+            t = np.arange(self.shape['t'])
+        elif isinstance(t, str):
+            t = eval(f"np.arange(self.shape['t'])[{t}]")
+        elif np.isscalar(t):
+            t = (t,)
 
         def get_ab(tyx: Imread, p: tuple[float, float] = (1, 99)) -> tuple[float, float]:
             s = tyx.flatten()
@@ -1014,9 +1021,9 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                             '-vf': f'setpts={25 / 7}*PTS,scale={shape_x}:{shape_y}:flags=neighbor'}
         ) as movie:
             im = self.transpose('tzcyx')
-            for t in trange(self.shape['t'], desc='Saving movie', disable=not bar):
+            for ti in tqdm(t, desc='Saving movie', disable=not bar):
                 movie.writeFrame(np.max([cframe(yx, c, a, b / s, scale)
-                                         for yx, a, b, c, s in zip(im[t].max('z'), *ab, colors, brightnesses)], 0))
+                                         for yx, a, b, c, s in zip(im[ti].max('z'), *ab, colors, brightnesses)], 0))
 
     def save_as_tiff(self, fname: Path | str = None, c: int | Sequence[int] = None, z: int | Sequence[int] = None,
                      t: int | Sequence[int] = None, split: bool = False, bar: bool = True, pixel_type: str = 'uint16',
@@ -1311,7 +1318,7 @@ def main() -> None:
     parser.add_argument('-r', '--register', help='register channels', action='store_true')
     parser.add_argument('-c', '--channel', help='channel', type=int, default=None)
     parser.add_argument('-z', '--zslice', help='z-slice', type=int, default=None)
-    parser.add_argument('-t', '--time', help='time', type=int, default=None)
+    parser.add_argument('-t', '--time', help='time', type=str, default=None)
     parser.add_argument('-s', '--split', help='split channels', action='store_true')
     parser.add_argument('-f', '--force', help='force overwrite', action='store_true')
     parser.add_argument('-C', '--movie-colors', help='colors for channels in movie', type=str, nargs='*')
