@@ -214,7 +214,7 @@ class Transforms(dict):
         for file in bead_files:
             with Imread(file) as im:
                 n_channels = max(n_channels, im.shape['c'])
-        with IJTiffFile(tiffile, (n_channels, 1, len(bead_files))) as tif:
+        with IJTiffFile(tiffile) as tif:
             for t, file in enumerate(bead_files):
                 with Imread(file) as im:
                     with Imread(file).with_transform() as jm:

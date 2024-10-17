@@ -21,8 +21,8 @@ import yaml
 from numpy.typing import ArrayLike, DTypeLike
 from ome_types import OME, from_xml, model, ureg
 from pint import set_application_registry
-from tiffwrite import IFD, IJTiffFile  # noqa
-from tqdm.auto import tqdm, trange
+from tiffwrite import FrameInfo, IJTiffParallel
+from tqdm.auto import tqdm
 
 from .jvm import JVM, JVMException
 from .transforms import Transform, Transforms
@@ -50,14 +50,14 @@ class ReaderNotFoundError(Exception):
     pass
 
 
-class TransformTiff(IJTiffFile):
+class TransformTiff(IJTiffParallel):
     """ transform frames in a parallel process to speed up saving """
     def __init__(self, image: Imread, *args: Any, **kwargs: Any) -> None:
         self.image = image
         super().__init__(*args, **kwargs)
 
-    def compress_frame(self, frame: tuple[int, int, int]) -> tuple[IFD, tuple[list[int], list[int]]]:
-        return super().compress_frame(np.asarray(self.image(*frame)).astype(self.dtype))
+    def parallel(self, frame: tuple[int, int, int]) -> tuple[FrameInfo]:
+        return (np.asarray(self.image(*frame)), 0, 0, 0),
 
 
 class DequeDict(OrderedDict):
@@ -397,6 +397,13 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
 
     def __str__(self) -> str:
         return str(self.path)
+
+    # @property
+    # def __array_interface__(self) -> dict[str, Any]:
+    #     return dict(shape=tuple(self.shape), typestr=self.dtype.str, version=3, data=self.tobytes())
+
+    def tobytes(self) -> bytes:
+        return self.flatten().tobytes()
 
     def __array__(self, dtype: DTypeLike = None, copy: bool = None) -> np.ndarray:
         if copy is False:
@@ -1054,7 +1061,7 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
                     n[i] = (n[i],)
 
             shape = [len(i) for i in n]
-            with TransformTiff(self, fname.with_suffix('.tif'), shape, pixel_type,
+            with TransformTiff(self, fname.with_suffix('.tif'), pixel_type,
                                pxsize=self.pxsize_um, deltaz=self.deltaz_um, **kwargs) as tif:
                 for i, m in tqdm(zip(product(*[range(s) for s in shape]), product(*n)),  # noqa
                                  total=np.prod(shape), desc='Saving tiff', disable=not bar):
