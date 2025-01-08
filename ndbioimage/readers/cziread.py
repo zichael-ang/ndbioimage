@@ -332,7 +332,7 @@ class OmeParse:
                 model.Objective(
                     id=objective.attrib['Id'],
                     model=self.text(objective.find('Manufacturer').find('Model')),
-                    immersion=self.text(objective.find('Immersion')),
+                    immersion=self.text(objective.find('Immersion')),  # type: ignore
                     lens_na=float(self.text(objective.find('LensNA'))),
                     nominal_magnification=float(self.text(objective.find('NominalMagnification')))))
 
@@ -410,14 +410,14 @@ class OmeParse:
                 pixels=model.Pixels(
                     id='Pixels:0', size_x=self.size_x, size_y=self.size_y,
                     size_c=self.size_c, size_z=self.size_z, size_t=self.size_t,
-                    dimension_order='XYCZT', type=pixel_type,
+                    dimension_order='XYCZT', type=pixel_type,  # type: ignore
                     significant_bits=int(self.text(image.find('ComponentBitCount'))),
-                    big_endian=False, interleaved=False, metadata_only=True),
+                    big_endian=False, interleaved=False, metadata_only=True),  # type: ignore
                 experimenter_ref=model.ExperimenterRef(id='Experimenter:0'),
                 instrument_ref=model.InstrumentRef(id='Instrument:0'),
                 objective_settings=model.ObjectiveSettings(
                     id=objective_settings.find('ObjectiveRef').attrib['Id'],
-                    medium=self.text(objective_settings.find('Medium')),
+                    medium=self.text(objective_settings.find('Medium')),  # type: ignore
                     refractive_index=float(self.text(objective_settings.find('RefractiveIndex')))),
                 stage_label=model.StageLabel(
                     name=f'Scene position #0',
@@ -492,13 +492,13 @@ class OmeParse:
                     model.Channel(
                         id=f'Channel:{idx}',
                         name=channel.attrib['Name'],
-                        acquisition_mode=self.text(channel.find('AcquisitionMode')),
+                        acquisition_mode=self.text(channel.find('AcquisitionMode')),  # type: ignore
                         color=model.Color(self.text(self.channels_ds[channel.attrib['Id']].find('Color'), 'white')),
                         detector_settings=model.DetectorSettings(id=detector.attrib['Id'], binning=binning),
                         # emission_wavelength=text(channel.find('EmissionWavelength')),  # TODO: fix
                         excitation_wavelength=light_source_settings.wavelength,
                         filter_set_ref=model.FilterSetRef(id=self.ome.instruments[0].filter_sets[filterset_idx].id),
-                        illumination_type=self.text(channel.find('IlluminationType')),
+                        illumination_type=self.text(channel.find('IlluminationType')),  # type: ignore
                         light_source_settings=light_source_settings,
                         samples_per_pixel=int(self.text(laser_scan_info.find('Averaging')))))
         elif self.version in ('1.1', '1.2'):
@@ -543,7 +543,7 @@ class OmeParse:
                     model.Channel(
                         id=f'Channel:{idx}',
                         name=channel.attrib['Name'],
-                        acquisition_mode=self.text(channel.find('AcquisitionMode')).replace(
+                        acquisition_mode=self.text(channel.find('AcquisitionMode')).replace(  # type: ignore
                             'SingleMoleculeLocalisation', 'SingleMoleculeImaging'),
                         color=color,
                         detector_settings=model.DetectorSettings(
@@ -553,7 +553,7 @@ class OmeParse:
                         excitation_wavelength=self.try_default(float, None,
                                                                self.text(channel.find('ExcitationWavelength'))),
                         # filter_set_ref=model.FilterSetRef(id=ome.instruments[0].filter_sets[filterset_idx].id),
-                        illumination_type=self.text(channel.find('IlluminationType')),
+                        illumination_type=self.text(channel.find('IlluminationType')),  # type: ignore
                         light_source_settings=light_source_settings,
                         samples_per_pixel=samples_per_pixel))
 
