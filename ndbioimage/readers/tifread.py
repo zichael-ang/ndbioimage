@@ -61,7 +61,8 @@ class Reader(AbstractReader, ABC):
                 pixels=model.Pixels(
                     id='Pixels:0',
                     size_c=size_c, size_z=size_z, size_t=size_t, size_x=size_x, size_y=size_y,
-                    dimension_order='XYCZT', type=dtype, physical_size_x=pxsize, physical_size_y=pxsize),
+                    dimension_order='XYCZT', type=dtype,  # type: ignore
+                    physical_size_x=pxsize, physical_size_y=pxsize),
                 objective_settings=model.ObjectiveSettings(id='Objective:0')))
         for c, z, t in product(range(size_c), range(size_z), range(size_t)):
             ome.images[0].pixels.planes.append(model.Plane(the_c=c, the_z=z, the_t=t, delta_t=interval_t * t))

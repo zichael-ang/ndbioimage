@@ -92,7 +92,8 @@ class Reader(AbstractReader, ABC):
                 pixels=model.Pixels(
                     size_c=size_c, size_z=size_z, size_t=size_t,
                     size_x=metadata['Info']['Width'], size_y=metadata['Info']['Height'],
-                    dimension_order='XYCZT', type=pixel_type, physical_size_x=pxsize, physical_size_y=pxsize,
+                    dimension_order='XYCZT',  # type: ignore
+                    type=pixel_type, physical_size_x=pxsize, physical_size_y=pxsize,
                     physical_size_z=metadata['Info']['Summary']['z-step_um']),
                 objective_settings=model.ObjectiveSettings(id='Objective:0')))
 

@@ -68,8 +68,8 @@ with Imread('image_file.tif', axes='cztyx') as im:
 ### Command line
 ```ndbioimage --help```: show help  
 ```ndbioimage image```: show metadata about image  
-```ndbioimage image {name}.tif -r```: copy image into image.tif (replacing {name} with image), while registering channels  
-```ndbioimage image image.mp4 -C cyan lime red``` copy image into image.mp4 (z will be max projected), make channel colors cyan lime and red
+```ndbioimage image -w {name}.tif -r```: copy image into image.tif (replacing {name} with image), while registering channels  
+```ndbioimage image -w image.mp4 -C cyan lime red``` copy image into image.mp4 (z will be max projected), make channel colors cyan lime and red
 
 ## Adding more formats
 Readers for image formats subclass AbstractReader. When an image reader is imported, Imread will
