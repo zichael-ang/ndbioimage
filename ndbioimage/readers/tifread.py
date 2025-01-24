@@ -80,6 +80,6 @@ class Reader(AbstractReader, ABC):
 
     def __frame__(self, c, z, t):
         if self.p_ndim == 3:
-            return np.transpose(self.reader.asarray(z + t * self.base.shape['z']), self.p_transpose)[c]
+            return np.transpose(self.reader.asarray(z + t * self.base_shape['z']), self.p_transpose)[c]
         else:
-            return self.reader.asarray(c + z * self.base.shape['c'] + t * self.base.shape['c'] * self.base.shape['z'])
+            return self.reader.asarray(c + z * self.base_shape['c'] + t * self.base_shape['c'] * self.base_shape['z'])

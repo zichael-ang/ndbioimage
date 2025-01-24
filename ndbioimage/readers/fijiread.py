@@ -26,7 +26,7 @@ class Reader(AbstractReader, ABC):
 
     def __frame__(self, c, z, t):  # Override this, return the frame at c, z, t
         self.reader.filehandle.seek(self.offset + t * self.count)
-        return np.reshape(unpack(self.fmt, self.reader.filehandle.read(self.count)), self.shape['yx'])
+        return np.reshape(unpack(self.fmt, self.reader.filehandle.read(self.count)), self.base_shape['yx'])
 
     def open(self):
         warn(f'File {self.path.name} is probably damaged, opening with fijiread.')

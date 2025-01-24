@@ -114,9 +114,15 @@ class Reader(AbstractReader, ABC):
         return ome
 
     def open(self):
-        pat = re.compile(r'(?:\d+-)?Pos.*', re.IGNORECASE)
-        if pat.match(self.path.name) is None:
-            path = sorted(file for file in self.path.iterdir() if pat.match(file.name))[self.series]
+        # /some_path/Pos4: path = /some_path, series = 4
+        # /some_path/5-Pos_001_005: path = /some_path/5-Pos_001_005, series = 0
+        if re.match(r'(?:\d+-)?Pos.*', self.path.name, re.IGNORECASE) is None:
+            pat = re.compile(rf'^(?:\d+-)?Pos{self.series}$', re.IGNORECASE)
+            files = sorted(file for file in self.path.iterdir() if pat.match(file.name))
+            if len(files):
+                path = files[0]
+            else:
+                raise FileNotFoundError(self.path / pat.pattern)
         else:
             path = self.path
 

@@ -1200,6 +1200,7 @@ class AbstractReader(Imread, metaclass=ABCMeta):
         image = self.ome.images[self.series if len(self.ome.images) > 1 else 0]
         pixels = image.pixels
         self.shape = pixels.size_y, pixels.size_x, pixels.size_c, pixels.size_z, pixels.size_t
+        self.base_shape = Shape((pixels.size_y, pixels.size_x, pixels.size_c, pixels.size_z, pixels.size_t), 'yxczt')
         self.dtype = pixels.type.value if dtype is None else dtype
         self.pxsize = pixels.physical_size_x_quantity
         try:

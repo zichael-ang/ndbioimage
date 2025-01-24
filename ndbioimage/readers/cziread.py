@@ -184,7 +184,7 @@ class Reader(AbstractReader, ABC):
         return OmeParse.get_ome(self.reader, self.filedict)
 
     def __frame__(self, c: int = 0, z: int = 0, t: int = 0) -> np.ndarray:
-        f = np.zeros(self.base.shape['yx'], self.dtype)
+        f = np.zeros(self.base_shape['yx'], self.dtype)
         if (c, z, t) in self.filedict:
             directory_entries = self.filedict[c, z, t]
             x_min = min([f.start[f.axes.index('X')] for f in directory_entries])
@@ -340,11 +340,14 @@ class OmeParse:
         if self.version == '1.0':
             for idx, tube_lens in enumerate({self.text(track_setup.find('TubeLensPosition'))
                                              for track_setup in self.multi_track_setup}):
+                try:
+                    nominal_magnification = float(re.findall(r'\d+[,.]\d*', tube_lens)[0].replace(',', '.'))
+                except Exception:  # noqa
+                    nominal_magnification = 1.0
+
                 self.ome.instruments[0].objectives.append(
                     model.Objective(id=f'Objective:Tubelens:{idx}', model=tube_lens,
-                                    nominal_magnification=float(
-                                        re.findall(r'\d+[,.]\d*', tube_lens)[0].replace(',', '.'))
-                                    ))
+                                    nominal_magnification=nominal_magnification))
         elif self.version in ('1.1', '1.2'):
             for tubelens in self.instrument.find('TubeLenses'):
                 try:
@@ -362,22 +365,28 @@ class OmeParse:
     def get_light_sources(self) -> None:
         if self.version == '1.0':
             for light_source in self.def_list(self.instrument.find('LightSources')):
-                if light_source.find('LightSourceType').find('Laser') is not None:
-                    self.ome.instruments[0].lasers.append(
-                        model.Laser(
-                            id=light_source.attrib['Id'],
-                            model=self.text(light_source.find('Manufacturer').find('Model')),
-                            power=float(self.text(light_source.find('Power'))),
-                            wavelength=float(
-                                self.text(light_source.find('LightSourceType').find('Laser').find('Wavelength')))))
+                try:
+                    if light_source.find('LightSourceType').find('Laser') is not None:
+                        self.ome.instruments[0].lasers.append(
+                            model.Laser(
+                                id=light_source.attrib['Id'],
+                                model=self.text(light_source.find('Manufacturer').find('Model')),
+                                power=float(self.text(light_source.find('Power'))),
+                                wavelength=float(
+                                    self.text(light_source.find('LightSourceType').find('Laser').find('Wavelength')))))
+                except AttributeError:
+                    pass
         elif self.version in ('1.1', '1.2'):
             for light_source in self.def_list(self.instrument.find('LightSources')):
-                if light_source.find('LightSourceType').find('Laser') is not None:
-                    self.ome.instruments[0].lasers.append(
-                        model.Laser(
-                            id=f"LightSource:{light_source.attrib['Id']}",
-                            power=float(self.text(light_source.find('Power'))),
-                            wavelength=float(light_source.attrib['Id'][-3:])))
+                try:
+                    if light_source.find('LightSourceType').find('Laser') is not None:
+                        self.ome.instruments[0].lasers.append(
+                            model.Laser(
+                                id=f"LightSource:{light_source.attrib['Id']}",
+                                power=float(self.text(light_source.find('Power'))),
+                                wavelength=float(light_source.attrib['Id'][-3:])))
+                except AttributeError:
+                    pass
 
     def get_filters(self) -> None:
         if self.version == '1.0':
