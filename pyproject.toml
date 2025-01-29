@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ndbioimage"
-version = "2025.1.1"
+version = "2025.1.2"
 description = "Bio image reading, metadata and some affine registration."
 authors = ["W. Pomp <w.pomp@nki.nl>"]
 license = "GPLv3"

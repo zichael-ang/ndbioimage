@@ -349,7 +349,7 @@ class OmeParse:
                     model.Objective(id=f'Objective:Tubelens:{idx}', model=tube_lens,
                                     nominal_magnification=nominal_magnification))
         elif self.version in ('1.1', '1.2'):
-            for tubelens in self.instrument.find('TubeLenses'):
+            for tubelens in self.def_list(self.instrument.find('TubeLenses')):
                 try:
                     nominal_magnification = float(re.findall(r'\d+(?:[,.]\d*)?',
                                                              tubelens.attrib['Name'])[0].replace(',', '.'))
@@ -384,8 +384,8 @@ class OmeParse:
                             model.Laser(
                                 id=f"LightSource:{light_source.attrib['Id']}",
                                 power=float(self.text(light_source.find('Power'))),
-                                wavelength=float(light_source.attrib['Id'][-3:])))
-                except AttributeError:
+                                wavelength=float(light_source.attrib['Id'][-3:])))  # TODO: follow Id reference
+                except (AttributeError, ValueError):
                     pass
 
     def get_filters(self) -> None:
