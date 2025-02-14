@@ -24,8 +24,8 @@ from pint import set_application_registry
 from tiffwrite import FrameInfo, IJTiffParallel
 from tqdm.auto import tqdm
 
-from .jvm import JVM, JVMException
-from .transforms import Transform, Transforms
+from .jvm import JVM, JVMException  # noqa: F401
+from .transforms import Transform, Transforms  # noqa: F401
 
 try:
     __version__ = version(Path(__file__).parent.name)
@@ -596,12 +596,12 @@ class Imread(np.lib.mixins.NDArrayOperatorsMixin, ABC):
             elif self.path.with_suffix('.pzl').exists():
                 pname = self.path.with_suffix('.pzl')
             else:
-                return
+                return None
             try:
                 return self.get_config(pname)
             except Exception:  # noqa
-                return
-        return
+                return None
+        return None
 
     @property
     def ndim(self) -> int:

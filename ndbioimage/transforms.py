@@ -321,11 +321,12 @@ class Transform:
     @classmethod
     def from_dict(cls, d):
         new = cls()
-        new.origin = [None if i is None else float(i) for i in d['CenterOfRotationPoint']]
-        new.parameters = [None if i is None else float(i) for i in d['TransformParameters']]
-        new.dparameters = ([None if i is None else float(i) for i in d['dTransformParameters']]
-                           if 'dTransformParameters' in d else 6 * [np.nan])
-        new.shape = [None if i is None else float(i) for i in d['Size']]
+        new.origin = None if d['CenterOfRotationPoint'] is None else [float(i) for i in d['CenterOfRotationPoint']]
+        new.parameters = ((1., 0., 0., 1., 0., 0.) if d['TransformParameters'] is None else
+                          [float(i) for i in d['TransformParameters']])
+        new.dparameters = ([(0., 0., 0., 0., 0., 0.) if i is None else float(i) for i in d['dTransformParameters']]
+                           if 'dTransformParameters' in d else 6 * [np.nan] and d['dTransformParameters'] is not None)
+        new.shape = None if d['Size'] is None else [None if i is None else float(i) for i in d['Size']]
         return new
 
     def __mul__(self, other):  # TODO: take care of dmatrix
@@ -382,6 +383,8 @@ class Transform:
     def parameters(self):
         if self.transform is not None:
             return list(self.transform.GetParameters())
+        else:
+            return [1., 0., 0., 1., 0., 0.]
 
     @parameters.setter
     def parameters(self, value):
