@@ -1,6 +1,6 @@
 [project]
 name = "ndbioimage"
-version = "2025.3.0"
+version = "2025.3.1"
 description = "Bio image reading, metadata and some affine registration."
 authors = [
     { name = "W. Pomp", email = "w.pomp@nki.nl" }
