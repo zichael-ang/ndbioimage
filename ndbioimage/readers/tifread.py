@@ -8,7 +8,6 @@ from pathlib import Path
 import numpy as np
 import tifffile
 import yaml
-from lfdfiles import TiffFile
 from ome_types import from_xml, model
 
 from .. import AbstractReader, try_default
@@ -36,12 +35,12 @@ class Reader(AbstractReader, ABC):
             match = re.match(r'^(.*)(pos.*)$', self.path.stem, flags=re.IGNORECASE)
             if match is not None and len(match.groups()) == 2:
                 a, b = match.groups()
-                file0 = TiffFile(self.path.with_stem(a + re.sub(r'\d', '0', b)))
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore', category=UserWarning)
-                    ome = from_xml(file0.ome_metadata)
-                    ome.images = [image for image in ome.images if self.path.stem[:len(image.name)] == image.name]
-                    return ome
+                with tifffile.TiffFile(self.path.with_stem(a + re.sub(r'\d', '0', b))) as file0:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('ignore', category=UserWarning)
+                        ome = from_xml(file0.ome_metadata)
+                        ome.images = [image for image in ome.images if self.path.stem[:len(image.name)] == image.name]
+                        return ome
 
         page = self.reader.pages[0]
         size_y = page.imagelength
