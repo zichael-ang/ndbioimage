@@ -1,46 +1,43 @@
-[tool.poetry]
+[project]
 name = "ndbioimage"
-version = "2025.2.1"
+version = "2025.3.0"
 description = "Bio image reading, metadata and some affine registration."
-authors = ["W. Pomp <w.pomp@nki.nl>"]
-license = "GPLv3"
+authors = [
+    { name = "W. Pomp", email = "w.pomp@nki.nl" }
+]
+license = { text = "GPL-3.0-or-later"}
 readme = "README.md"
 keywords = ["bioformats", "imread", "numpy", "metadata"]
 include = ["transform.txt"]
-repository = "https://github.com/wimpomp/ndbioimage"
+requires-python = ">=3.10"
 exclude = ["ndbioimage/jars"]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-numpy = ">=1.20.0"
-pandas = "*"
-tifffile = "*"
-czifile = "2019.7.2"
-tiffwrite = ">=2024.12.1"
-ome-types = ">=0.4.0"
-pint = "*"
-tqdm = "*"
-lxml = "*"
-pyyaml = "*"
-parfor = ">=2025.1.0"
-JPype1 = "*"
-SimpleITK-SimpleElastix = [
-    { version = "*", python = "<3.12" },
-    { version = "*", python = ">=3.12", markers = "sys_platform != 'darwin'" },
-    { version = "*", python = ">=3.12", markers = "platform_machine == 'aarch64'" },
+dependencies = [
+    "czifile == 2019.7.2",
+    "imagecodecs",
+    "JPype1",
+    "lxml",
+    "numpy >= 1.20",
+    "ome-types",
+    "pandas",
+    "parfor >= 2025.1.0",
+    "pint",
+    "pyyaml",
+    "SimpleITK-SimpleElastix; sys_platform != 'darwin'",
+    "scikit-image",
+    "tifffile <= 2025.1.10",
+    "tiffwrite >= 2024.12.1",
+    "tqdm",
 ]
-scikit-image = "*"
-imagecodecs = "*"
-xsdata = "^23"  # until pydantic is up-to-date
-matplotlib = { version = "*", optional = true }
-scikit-video = { version = "*", optional = true }
-pytest = { version = "*", optional = true }
 
-[tool.poetry.extras]
+[project.optional-dependencies]
 test = ["pytest"]
 write = ["matplotlib", "scikit-video"]
 
-[tool.poetry.scripts]
+[project.urls]
+repository = "https://github.com/wimpomp/ndbioimage"
+
+[project.scripts]
 ndbioimage = "ndbioimage:main"
 
 [tool.pytest.ini_options]

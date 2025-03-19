@@ -299,7 +299,7 @@ class Transform:
             new.shape = [float(t) for t in transform['Size']]
             new.origin = [(t - 1) / 2 for t in new.shape]
         else:
-            raise NotImplementedError(f'{kind} tranforms not implemented (yet)')
+            raise NotImplementedError(f'{kind} transforms not implemented (yet)')
         new.dparameters = 6 * [np.nan]
         return new
 

@@ -6,9 +6,10 @@ from pathlib import Path
 import numpy as np
 import tifffile
 import yaml
-from ome_types import model
+import warnings
+from ome_types import model, from_xml
 
-from .. import AbstractReader
+from .. import AbstractReader, try_default
 
 
 class Reader(AbstractReader, ABC):
@@ -25,61 +26,75 @@ class Reader(AbstractReader, ABC):
 
     @cached_property
     def metadata(self):
-        return {key: yaml.safe_load(value) if isinstance(value, str) else value
+        return {key: try_default(yaml.safe_load, value, value) if isinstance(value, str) else value
                 for key, value in self.reader.imagej_metadata.items()}
 
     def get_ome(self):
-        page = self.reader.pages[0]
-        size_y = page.imagelength
-        size_x = page.imagewidth
-        if self.p_ndim == 3:
-            size_c = page.samplesperpixel
-            size_t = self.metadata.get('frames', 1)  # // C
+        if self.reader.is_ome:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', category=UserWarning)
+                return from_xml(self.reader.ome_metadata)
         else:
-            size_c = self.metadata.get('channels', 1)
-            size_t = self.metadata.get('frames', 1)
-        size_z = self.metadata.get('slices', 1)
-        if 282 in page.tags and 296 in page.tags and page.tags[296].value == 1:
-            f = page.tags[282].value
-            pxsize = f[1] / f[0]
-        else:
-            pxsize = None
+            page = self.reader.pages[0]
+            size_y = page.imagelength
+            size_x = page.imagewidth
+            if self.p_ndim == 3:
+                size_c = page.samplesperpixel
+                size_t = self.metadata.get('frames', 1)  # // C
+            else:
+                size_c = self.metadata.get('channels', 1)
+                size_t = self.metadata.get('frames', 1)
+            size_z = self.metadata.get('slices', 1)
+            if 282 in page.tags and 296 in page.tags and page.tags[296].value == 1:
+                f = page.tags[282].value
+                pxsize = f[1] / f[0]
+            else:
+                pxsize = None
 
-        dtype = page.dtype.name
-        if dtype not in ('int8', 'int16', 'int32', 'uint8', 'uint16', 'uint32',
-                         'float', 'double', 'complex', 'double-complex', 'bit'):
-            dtype = 'float'
+            dtype = page.dtype.name
+            if dtype not in ('int8', 'int16', 'int32', 'uint8', 'uint16', 'uint32',
+                             'float', 'double', 'complex', 'double-complex', 'bit'):
+                dtype = 'float'
 
-        interval_t = self.metadata.get('interval', 0)
+            interval_t = self.metadata.get('interval', 0)
 
-        ome = model.OME()
-        ome.instruments.append(model.Instrument(id='Instrument:0'))
-        ome.instruments[0].objectives.append(model.Objective(id='Objective:0'))
-        ome.images.append(
-            model.Image(
-                id='Image:0',
-                pixels=model.Pixels(
-                    id='Pixels:0',
-                    size_c=size_c, size_z=size_z, size_t=size_t, size_x=size_x, size_y=size_y,
-                    dimension_order='XYCZT', type=dtype,  # type: ignore
-                    physical_size_x=pxsize, physical_size_y=pxsize),
-                objective_settings=model.ObjectiveSettings(id='Objective:0')))
-        for c, z, t in product(range(size_c), range(size_z), range(size_t)):
-            ome.images[0].pixels.planes.append(model.Plane(the_c=c, the_z=z, the_t=t, delta_t=interval_t * t))
-        return ome
+            ome = model.OME()
+            ome.instruments.append(model.Instrument(id='Instrument:0'))
+            ome.instruments[0].objectives.append(model.Objective(id='Objective:0'))
+            ome.images.append(
+                model.Image(
+                    id='Image:0',
+                    pixels=model.Pixels(
+                        id='Pixels:0',
+                        size_c=size_c, size_z=size_z, size_t=size_t, size_x=size_x, size_y=size_y,
+                        dimension_order='XYCZT', type=dtype,  # type: ignore
+                        physical_size_x=pxsize, physical_size_y=pxsize),
+                    objective_settings=model.ObjectiveSettings(id='Objective:0')))
+            for c, z, t in product(range(size_c), range(size_z), range(size_t)):
+                ome.images[0].pixels.planes.append(model.Plane(the_c=c, the_z=z, the_t=t, delta_t=interval_t * t))
+            return ome
 
     def open(self):
         self.reader = tifffile.TiffFile(self.path)
-        page = self.reader.pages[0]
+        page = self.reader.pages.first
         self.p_ndim = page.ndim  # noqa
         if self.p_ndim == 3:
             self.p_transpose = [i for i in [page.axes.find(j) for j in 'SYX'] if i >= 0]  # noqa
+        else:
+            self.p_transpose = [i for i in [page.axes.find(j) for j in 'YX'] if i >= 0]  # noqa
 
     def close(self):
         self.reader.close()
 
-    def __frame__(self, c, z, t):
+    def __frame__(self, c: int, z: int, t: int):
+        dimension_order = self.ome.images[0].pixels.dimension_order.value
         if self.p_ndim == 3:
-            return np.transpose(self.reader.asarray(z + t * self.base_shape['z']), self.p_transpose)[c]
+            axes = ''.join([ax.lower() for ax in dimension_order if ax.lower() in 'zt'])
+            ct = {'z': z, 't': t}
+            n = sum([ct[ax] * np.prod(self.base_shape[axes[:i]]) for i, ax in enumerate(axes)])
+            return np.transpose(self.reader.asarray(int(n)), self.p_transpose)[int(c)]
         else:
-            return self.reader.asarray(c + z * self.base_shape['c'] + t * self.base_shape['c'] * self.base_shape['z'])
+            axes = ''.join([ax.lower() for ax in dimension_order if ax.lower() in 'czt'])
+            czt = {'c': c, 'z': z, 't': t}
+            n = sum([czt[ax] * np.prod(self.base_shape[axes[:i]]) for i, ax in enumerate(axes)])
+        return np.transpose(self.reader.asarray(int(n)), self.p_transpose)
