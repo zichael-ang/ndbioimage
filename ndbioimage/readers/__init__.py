@@ -1,1 +1,1 @@
-__all__ = 'bfread', 'cziread', 'fijiread', 'ndread', 'seqread', 'tifread', 'metaseriesread'
+__all__ = 'bfread', 'cziread', 'nd2read', 'fijiread', 'ndread', 'seqread', 'tifread', 'ometifread', 'metaseriesread'

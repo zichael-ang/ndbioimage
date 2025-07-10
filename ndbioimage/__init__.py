@@ -1325,7 +1325,6 @@ class AbstractReader(Imread, metaclass=ABCMeta):
         except Exception:  # noqa
             pass
 
-
 def main() -> None:
     parser = ArgumentParser(description='Display info and save as tif')
     parser.add_argument('-v', '--version', action='version', version=__version__)
